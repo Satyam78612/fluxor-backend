@@ -17,6 +17,7 @@ export class TokenService {
     private static instance: TokenService;
     private cache: NodeCache;
 
+    // ✅ FIX: Data is now hardcoded so it cannot be "missing" on the server
     private readonly tokens = [
         { "symbol": "ETH", "coingeckoId": "ethereum" },
         { "symbol": "BNB", "coingeckoId": "binancecoin" },
@@ -208,6 +209,9 @@ export class TokenService {
         return map[chainString] || 0;
     }
 
+    // ==========================================================
+    // METHOD 1: Search Single Token
+    // ==========================================================
     public async searchToken(address: string): Promise<TokenData | null> {
         const cleanAddress = address.trim().startsWith('0x')
             ? address.trim().toLowerCase()
@@ -215,11 +219,9 @@ export class TokenService {
 
         const cached = this.cache.get<TokenData>(cleanAddress);
         if (cached) {
-            console.log(`[CACHE HIT] Serving ${cleanAddress}`);
             return cached;
         }
 
-        console.log(`[MISS] Fetching ${cleanAddress}...`);
         let tokenData: TokenData | null = null;
         let logoUrl = "questionmark.circle";
 
@@ -238,7 +240,7 @@ export class TokenService {
                     if (info.image_url && !info.image_url.includes("missing")) {
                         logoUrl = info.image_url;
                     }
-                } catch (e) { }
+                } catch (e) { /* ignore */ }
 
                 tokenData = {
                     source: 'GeckoTerminal',
@@ -294,12 +296,16 @@ export class TokenService {
         return tokenData;
     }
 
+    // ==========================================================
+    // METHOD 2: Get Portfolio Prices (Using HARDCODED List)
+    // ==========================================================
     public async getPortfolioPrices(): Promise<Record<string, { usd: number, usd_24h_change: number }>> {
         const cacheKey = "portfolio_prices";
         const cached = this.cache.get<any>(cacheKey);
         if (cached) return cached;
 
         try {
+            // ✅ FIX: Use this.tokens instead of reading a file
             const ids = this.tokens.map(t => t.coingeckoId).filter(id => id).join(',');
             if (!ids) return {};
 
@@ -322,6 +328,7 @@ export class TokenService {
             this.tokens.forEach(t => {
                 const coinData = data[t.coingeckoId];
                 if (coinData) {
+                    // ✅ FIX: Key is coingeckoId to match your iOS app
                     prices[t.coingeckoId] = {
                         usd: coinData.usd,
                         usd_24h_change: coinData.usd_24h_change || 0

@@ -28,7 +28,7 @@ const TRACKED_TOKEN_IDS = [
 
 async function fetchCoinGeckoPrices(ids) {
     try {
-        // ✅ ADDED: Fake User-Agent to prevent 403 Forbidden / blocking
+        // ✅ NEW: Fake Headers to look like a Chrome Browser
         const config = {
             params: {
                 ids: ids.join(','),
@@ -37,15 +37,17 @@ async function fetchCoinGeckoPrices(ids) {
             },
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'application/json'
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Connection': 'keep-alive'
             },
-            timeout: 5000
+            timeout: 10000 // Increased timeout to 10s
         };
 
         const response = await axios.get('https://api.coingecko.com/api/v3/simple/price', config);
         return response.data;
     } catch (error) {
-        // Log the EXACT error code to see if it's 429 (Rate Limit) or 403 (Block)
+        // Log the exact error status to see if we are blocked (403) or rate limited (429)
         const status = error.response ? error.response.status : 'Unknown';
         console.error(`[PriceService] API Error (${status}): ${error.message}`);
         return {};
@@ -67,7 +69,8 @@ async function updatePrices(cache) {
         const result = await fetchCoinGeckoPrices(chunk);
         allPrices = { ...allPrices, ...result };
         
-        await new Promise(resolve => setTimeout(resolve, 500)); // Increased delay slightly
+        // Wait 1 second between chunks to be safer
+        await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
     const missing = TRACKED_TOKEN_IDS.filter(id => !allPrices[id]);
@@ -76,10 +79,10 @@ async function updatePrices(cache) {
     }
 
     if (Object.keys(allPrices).length > 0) {
-        cache.set("ALL_PRICES", allPrices, 120); // 120s TTL for safety
+        cache.set("ALL_PRICES", allPrices, 120);
         console.log(`[PriceService] Cached ${Object.keys(allPrices).length} prices.`);
     } else {
-        console.error("[PriceService] ❌ CRITICAL: No prices fetched. Cache is empty.");
+        console.error("[PriceService] ❌ CRITICAL: No prices fetched. Server might be blocked.");
     }
 }
 
@@ -94,8 +97,10 @@ function startPriceService(cache) {
     }
     started = true;
 
+    // Run immediately
     updatePrices(cache).catch(e => console.error("[PriceService] Initial update failed:", e));
     
+    // Run every 60 seconds
     setInterval(async () => {
         try {
             await updatePrices(cache);

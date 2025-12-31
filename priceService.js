@@ -1,5 +1,6 @@
 const axios = require('axios');
 
+// --- 1. CONFIGURATION ---
 const TRACKED_TOKEN_IDS = [
     "ethereum", "binancecoin", "solana", "hyperliquid", "avalanche-2", "okb", "mantle",
     "matic-network", "plasma", "sonic-3", "berachain-bera", "monad", "bitcoin", "ripple",
@@ -23,19 +24,30 @@ const TRACKED_TOKEN_IDS = [
     "ocean-protocol", "avici", "deapcoin"
 ];
 
+// --- 2. FETCHING LOGIC ---
+
 async function fetchCoinGeckoPrices(ids) {
     try {
-        const response = await axios.get('https://api.coingecko.com/api/v3/simple/price', {
+        // ✅ ADDED: Fake User-Agent to prevent 403 Forbidden / blocking
+        const config = {
             params: {
                 ids: ids.join(','),
                 vs_currencies: 'usd',
                 include_24hr_change: 'true'
             },
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'application/json'
+            },
             timeout: 5000
-        });
+        };
+
+        const response = await axios.get('https://api.coingecko.com/api/v3/simple/price', config);
         return response.data;
     } catch (error) {
-        console.error(`[PriceService] API Error: ${error.message}`);
+        // Log the EXACT error code to see if it's 429 (Rate Limit) or 403 (Block)
+        const status = error.response ? error.response.status : 'Unknown';
+        console.error(`[PriceService] API Error (${status}): ${error.message}`);
         return {};
     }
 }
@@ -55,7 +67,7 @@ async function updatePrices(cache) {
         const result = await fetchCoinGeckoPrices(chunk);
         allPrices = { ...allPrices, ...result };
         
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 500)); // Increased delay slightly
     }
 
     const missing = TRACKED_TOKEN_IDS.filter(id => !allPrices[id]);
@@ -64,10 +76,14 @@ async function updatePrices(cache) {
     }
 
     if (Object.keys(allPrices).length > 0) {
-        cache.set("ALL_PRICES", allPrices, 90);
+        cache.set("ALL_PRICES", allPrices, 120); // 120s TTL for safety
         console.log(`[PriceService] Cached ${Object.keys(allPrices).length} prices.`);
+    } else {
+        console.error("[PriceService] ❌ CRITICAL: No prices fetched. Cache is empty.");
     }
 }
+
+// --- 3. EXPORT WITH SAFETY CHECKS ---
 
 let started = false;
 

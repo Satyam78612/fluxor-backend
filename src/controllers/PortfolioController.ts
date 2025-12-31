@@ -6,10 +6,8 @@ export const getPortfolioPrices = async (req: Request, res: Response) => {
         const service = TokenService.getInstance();
         const prices = await service.getPortfolioPrices();
         
-        return res.json({
-            data: prices,
-            timestamp: new Date().toISOString()
-        });
+        return res.json(prices);
+        
     } catch (error) {
         return res.status(500).json({ error: "Failed to fetch portfolio prices" });
     }

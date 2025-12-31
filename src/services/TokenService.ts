@@ -163,17 +163,14 @@ export class TokenService {
         return tokenData;
     }
 
-    public async getPortfolioPrices(): Promise<Record<string, number>> {
+    public async getPortfolioPrices(): Promise<Record<string, { usd: number, usd_24h_change: number }>> {
         const cacheKey = "portfolio_prices";
-        const cached = this.cache.get<Record<string, number>>(cacheKey);
+        const cached = this.cache.get<any>(cacheKey);
         if (cached) return cached;
 
         try {
             const filePath = path.join(__dirname, '../config/tokens.json');
-            if (!fs.existsSync(filePath)) {
-                console.error("Config file not found:", filePath);
-                return {};
-            }
+            if (!fs.existsSync(filePath)) return {};
 
             const fileData = fs.readFileSync(filePath, 'utf-8');
             const tokens = JSON.parse(fileData);
@@ -184,23 +181,26 @@ export class TokenService {
             const apiKey = process.env.COINGECKO_API_KEY;
             const options: any = {
                 timeout: 5000,
-                headers: {
-                    'accept': 'application/json'
-                }
+                headers: { 'accept': 'application/json' }
             };
 
             if (apiKey) {
-                console.log("Using CoinGecko API Key...");
                 options.headers['x-cg-demo-api-key'] = apiKey;
             }
 
-            const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`;
+            const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`;
+            
             const { data } = await axios.get(url, options);
 
-            const prices: Record<string, number> = {};
+            const prices: Record<string, { usd: number, usd_24h_change: number }> = {};
+            
             tokens.forEach((t: any) => {
-                if (data[t.coingeckoId]) {
-                    prices[t.symbol] = data[t.coingeckoId].usd;
+                const coinData = data[t.coingeckoId];
+                if (coinData) {
+                    prices[t.coingeckoId] = {
+                        usd: coinData.usd,
+                        usd_24h_change: coinData.usd_24h_change || 0
+                    };
                 }
             });
 

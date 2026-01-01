@@ -1,115 +1,110 @@
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 
-// --- 1. CONFIGURATION ---
-const TRACKED_TOKEN_IDS = [
-    "ethereum", "binancecoin", "solana", "hyperliquid", "avalanche-2", "okb", "mantle",
-    "matic-network", "plasma", "sonic-3", "berachain-bera", "monad", "bitcoin", "ripple",
-    "tron", "cardano", "polkadot", "near", "zcash", "crypto-com-chain", "dogecoin",
-    "the-open-network", "gatechain-token", "cosmos", "weth", "ethena-usde", "usds",
-    "usd1-wlfi", "paypal-usd", "usdtb", "tether-gold", "tether", "usd-coin", "chainlink",
-    "shiba-inu", "dai", "susds", "uniswap", "rain", "memecore", "bitget-token", "aave",
-    "falcon-finance", "pepe", "aster-2", "midnight-3", "ethena", "pax-gold", "global-dollar",
-    "sky", "syrupusdc", "ripple-usd", "worldcoin-wld", "ondo-finance", "arbitrum", "pump-fun",
-    "quant-network", "official-trump", "usdd", "bonk", "render-token", "usdai", "syrupusdt",
-    "morpho", "pancakeswap-token", "jupiter-exchange-solana", "pudgy-penguins", "curve-dao-token",
-    "usual-usd", "optimism", "first-digital-usd", "lido-dao", "gho", "true-usd", "injective-protocol",
-    "ether-fi", "spx6900", "virtual-protocol", "aerodrome-finance", "starknet", "doublezero",
-    "telcoin", "bittorrent", "floki", "the-graph", "syrup", "trust-wallet-token", "euro-coin",
-    "olympus", "resolv-usr", "merlin-chain", "pyth-network", "gnosis", "basic-attention-token",
-    "humanity", "pendle", "the-sandbox", "helium", "dogwifcoin", "fartcoin", "gala", "zksync",
-    "layerzero", "compound-governance-token", "raydium", "decentraland", "reallink", "usda-2",
-    "agora-dollar", "zero-gravity", "golem", "falcon-finance-ff", "eigenlayer", "1inch", "kamino",
-    "instadapp", "immutable-x", "lombard-protocol", "wormhole", "origintrail", "zora", "astherus-usdf",
-    "jito-governance-token", "bnb48-club-token", "zencash", "safepal", "orderly-network",
-    "ocean-protocol", "avici", "deapcoin"
+const TOP_COIN_IDS = [
+    "ethereum", "binancecoin", "solana", "hyperliquid", "avalanche-2", 
+    "matic-network", "plasma", "sonic-3", "berachain-bera", "monad", 
+    "bitcoin", "ripple", "polkadot", "near", "zcash", "dogecoin", 
+    "the-open-network", "tether-gold", "tether", "usd-coin", 
+    "chainlink", "uniswap", "pepe", "ondo-finance", "arbitrum",
+    "aave", "sky", "worldcoin-wld", "succinct", "pancakeswap-token",
+    "jupiter-exchange-solana", "pudgy-penguins", "optimism", "aerodrome-finance",
+    "starknet", "syrup", "pendle", "layerzero", "raydium", "eigenlayer"
 ];
 
-// --- 2. FETCHING LOGIC ---
+const DS_BATCH_SIZE = 40;
+const DS_DELAY_MS = 1000;
+const INTERVAL_MS = 300 * 1000; 
 
-async function fetchCoinGeckoPrices(ids) {
-    try {
-        // ✅ NEW: Fake Headers to look like a Chrome Browser
-        const config = {
-            params: {
-                ids: ids.join(','),
-                vs_currencies: 'usd',
-                include_24hr_change: 'true'
-            },
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Connection': 'keep-alive'
-            },
-            timeout: 10000 // Increased timeout to 10s
-        };
+let JSON_TOKENS = [];
 
-        const response = await axios.get('https://api.coingecko.com/api/v3/simple/price', config);
-        return response.data;
-    } catch (error) {
-        // Log the exact error status to see if we are blocked (403) or rate limited (429)
-        const status = error.response ? error.response.status : 'Unknown';
-        console.error(`[PriceService] API Error (${status}): ${error.message}`);
-        return {};
+try {
+    const contractPath = path.join(__dirname, 'Contract.json');
+    if (fs.existsSync(contractPath)) {
+        JSON_TOKENS = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+        console.log(`[PriceService] ✅ Loaded ${JSON_TOKENS.length} tokens`);
     }
+} catch (error) { console.error(`[PriceService] ❌ JSON Error: ${error.message}`); }
+
+async function fetchCoinGeckoBatch(ids) {
+    if (ids.length === 0) return {};
+    try {
+        const res = await axios.get('https://api.coingecko.com/api/v3/simple/price', {
+            params: { ids: ids.join(','), vs_currencies: 'usd', include_24hr_change: 'true' },
+            timeout: 10000
+        });
+        return res.data;
+    } catch (e) { return {}; }
+}
+
+async function fetchDexScreenerPrices(tokens) {
+    const prices = {};
+    for (let i = 0; i < tokens.length; i += DS_BATCH_SIZE) {
+        const batch = tokens.slice(i, i + DS_BATCH_SIZE);
+        const addresses = batch.map(t => t.address).filter(a => a && a.length > 10).join(',');
+        if (!addresses) continue;
+
+        try {
+            const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${addresses}`, { timeout: 10000 });
+            const pairs = res.data.pairs || [];
+            
+            batch.forEach(token => {
+                const addr = token.address.toLowerCase();
+                const tokenPairs = pairs.filter(p => 
+                    p.baseToken.address?.toLowerCase() === addr || 
+                    p.quoteToken.address?.toLowerCase() === addr
+                );
+                
+                if (tokenPairs.length > 0) {
+                    const bestPair = tokenPairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+                    
+                    prices[token.id] = {
+                        usd: parseFloat(bestPair.priceUsd || 0),
+                        usd_24h_change: bestPair.priceChange?.h24 || 0
+                    };
+                }
+            });
+            if (i + DS_BATCH_SIZE < tokens.length) await new Promise(r => setTimeout(r, DS_DELAY_MS));
+        } catch (err) { console.error(`[PriceService] DS Batch Error: ${err.message}`); }
+    }
+    return prices;
 }
 
 async function updatePrices(cache) {
-    console.log(`[${new Date().toISOString()}] Updating prices...`);
+    console.log(`[${new Date().toISOString()}] 🔄 Starting Hybrid Update...`);
     
-    const chunkSize = 50;
-    const chunks = [];
-    for (let i = 0; i < TRACKED_TOKEN_IDS.length; i += chunkSize) {
-        chunks.push(TRACKED_TOKEN_IDS.slice(i, i + chunkSize));
-    }
+    const cgPricesRaw = await fetchCoinGeckoBatch(TOP_COIN_IDS);
+    const cgPrices = {};
+    
+    Object.keys(cgPricesRaw).forEach(id => {
+        cgPrices[id] = { 
+            usd: cgPricesRaw[id].usd, 
+            usd_24h_change: cgPricesRaw[id].usd_24h_change 
+        };
+    });
 
-    let allPrices = {};
+    const dsTarget = JSON_TOKENS
+        .filter(t => !TOP_COIN_IDS.includes(t.id))
+        .map(t => ({ id: t.id, address: t.deployments?.[0]?.address || null }))
+        .filter(t => t.address);
+    const dsPrices = await fetchDexScreenerPrices(dsTarget);
 
-    for (const chunk of chunks) {
-        const result = await fetchCoinGeckoPrices(chunk);
-        allPrices = { ...allPrices, ...result };
-        
-        // Wait 1 second between chunks to be safer
-        await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-
-    const missing = TRACKED_TOKEN_IDS.filter(id => !allPrices[id]);
-    if (missing.length > 0) {
-        console.warn(`[PriceService] ⚠️ Warning: No price data found for: ${missing.join(', ')}`);
-    }
+    const allPrices = { ...(cache.get("ALL_PRICES") || {}), ...cgPrices, ...dsPrices };
 
     if (Object.keys(allPrices).length > 0) {
-        cache.set("ALL_PRICES", allPrices, 120);
-        console.log(`[PriceService] Cached ${Object.keys(allPrices).length} prices.`);
-    } else {
-        console.error("[PriceService] ❌ CRITICAL: No prices fetched. Server might be blocked.");
+        cache.set("ALL_PRICES", allPrices, 360);
+        console.log(`[PriceService] ✅ Cached ${Object.keys(allPrices).length} items by ID.`);
     }
 }
 
-// --- 3. EXPORT WITH SAFETY CHECKS ---
-
 let started = false;
-
 function startPriceService(cache) {
-    if (started) {
-        console.log("[PriceService] Already running. Skipping start.");
-        return;
-    }
+    if (started) return;
     started = true;
-
-    // Run immediately
-    updatePrices(cache).catch(e => console.error("[PriceService] Initial update failed:", e));
-    
-    // Run every 60 seconds
-    setInterval(async () => {
-        try {
-            await updatePrices(cache);
-        } catch (e) {
-            console.error('[PriceService] Background update error:', e);
-        }
-    }, 60 * 1000);
-    
-    console.log("[PriceService] Background job started.");
+    updatePrices(cache).catch(e => console.error("Initial update failed:", e));
+    setInterval(() => updatePrices(cache), INTERVAL_MS);
+    console.log("[PriceService] Started (Simple ID mode).");
 }
 
 module.exports = { startPriceService };

@@ -4,7 +4,7 @@
     "name": "Ethereum",
     "symbol": "ETH",
     "logo": "https://coin-images.coingecko.com/coins/images/279/large/ethereum.png?1696501628",
-    "decimal": 18,
+    "decimals": 18,
     "native_identifier": "0x0000000000000000000000000000000000000000"
   },
   {
@@ -12,7 +12,7 @@
     "name": "BNB",
     "symbol": "BNB",
     "logo": "https://coin-images.coingecko.com/coins/images/825/large/bnb-icon2_2x.png?1696501970",
-    "decimal": 18,
+    "decimals": 18,
     "native_identifier": "0x0000000000000000000000000000000000000000"
   },
   {
@@ -20,7 +20,7 @@
     "name": "Solana",
     "symbol": "SOL",
     "logo": "https://coin-images.coingecko.com/coins/images/4128/large/solana.png?1718769756",
-    "decimal": 9,
+    "decimals": 9,
     "native_identifier": "So11111111111111111111111111111111111111112"
   },
   {
@@ -28,7 +28,7 @@
     "name": "Hyperliquid",
     "symbol": "HYPE",
     "logo": "https://coin-images.coingecko.com/coins/images/50882/large/hyperliquid.jpg?1729431300",
-    "decimal": 18,
+    "decimals": 18,
     "native_identifier": "0x0000000000000000000000000000000000000000"
   },
   {
@@ -36,7 +36,7 @@
     "name": "Avalanche",
     "symbol": "AVAX",
     "logo": "https://coin-images.coingecko.com/coins/images/12559/large/Avalanche_Circle_RedWhite_Trans.png?1696512369",
-    "decimal": 18,
+    "decimals": 18,
     "native_identifier": "0x0000000000000000000000000000000000000000"
   },
   {
@@ -44,7 +44,7 @@
     "name": "OKB",
     "symbol": "OKB",
     "logo": "https://coin-images.coingecko.com/coins/images/4463/large/WeChat_Image_20220118095654.png?1696505053",
-    "decimal": 18,
+    "decimals": 18,
     "native_identifier": "0x0000000000000000000000000000000000000000"
   },
   {
@@ -52,7 +52,7 @@
     "name": "Mantle",
     "symbol": "MNT",
     "logo": "https://coin-images.coingecko.com/coins/images/30980/large/MNT_Token_Logo.png?1765516974",
-    "decimal": 18,
+    "decimals": 18,
     "native_identifier": "0x0000000000000000000000000000000000000000"
   },
   {
@@ -60,7 +60,7 @@
     "name": "MATIC (migrated to POL)",
     "symbol": "MATIC",
     "logo": "https://coin-images.coingecko.com/coins/images/4713/large/polygon.png?1698233745",
-    "decimal": 18,
+    "decimals": 18,
     "native_identifier": "0x0000000000000000000000000000000000001010"
   },
   {
@@ -68,7 +68,7 @@
     "name": "Plasma",
     "symbol": "XPL",
     "logo": "https://coin-images.coingecko.com/coins/images/66489/large/Plasma-symbol-green-1.png?1755142558",
-    "decimal": 18,
+    "decimals": 18,
     "native_identifier": "0x0000000000000000000000000000000000000000"
   },
   {
@@ -76,7 +76,7 @@
     "name": "Sonic",
     "symbol": "S",
     "logo": "https://coin-images.coingecko.com/coins/images/38108/large/200x200_Sonic_Logo.png?1734679256",
-    "decimal": 18,
+    "decimals": 18,
     "native_identifier": "0x0000000000000000000000000000000000000000"
   },
   {
@@ -84,7 +84,7 @@
     "name": "Berachain",
     "symbol": "BERA",
     "logo": "https://coin-images.coingecko.com/coins/images/25235/large/BERA.png?1738822008",
-    "decimal": 18,
+    "decimals": 18,
     "native_identifier": "0x0000000000000000000000000000000000000000"
   },
   {
@@ -92,7 +92,7 @@
     "name": "Monad",
     "symbol": "MON",
     "logo": "https://coin-images.coingecko.com/coins/images/38927/large/mon.png?1766029057",
-    "decimal": 18,
+    "decimals": 18,
     "native_identifier": "0x0000000000000000000000000000000000000000"
   },
   {

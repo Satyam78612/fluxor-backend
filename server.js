@@ -155,80 +155,55 @@ app.get('/api/search', async (req, res) => {
     const { address } = req.query;
     if (!address) return res.status(400).json({ error: 'Address is required' });
 
-    const cleanAddress = address.trim().startsWith('0x') ? address.trim().toLowerCase() : address.trim();
-    
+    const cleanAddress = address.trim().toLowerCase();
+
     const cachedData = cache.get(cleanAddress);
     if (cachedData) return res.json(cachedData);
 
-    console.log(`[SEARCH] Fetching ${cleanAddress}...`);
-    let logoUrl = "questionmark.circle";
     let tokenData = null;
 
     try {
-        const searchUrl = `https://api.geckoterminal.com/api/v2/search/pools?query=${cleanAddress}`;
-        const searchRes = await axios.get(searchUrl, { timeout: 5000 });
-        const pool = searchRes.data.data?.[0];
+        const [geckoRes, dexRes] = await Promise.allSettled([
+            axios.get(`https://api.geckoterminal.com/api/v2/search/pools?query=${cleanAddress}`, { timeout: 4000 }),
+            axios.get(`https://api.dexscreener.com/latest/dex/tokens/${cleanAddress}`, { timeout: 4000 })
+        ]);
 
-        if (pool) {
-            const networkId = pool.relationships.network.data.id;
-            const attr = pool.attributes;
-            let realSymbol = "UNK";
-
-            try {
-                const tokenUrl = `https://api.geckoterminal.com/api/v2/networks/${networkId}/tokens/${cleanAddress}`;
-                const tokenRes = await axios.get(tokenUrl, { timeout: 3000 });
-                const tokenInfo = tokenRes.data.data;
-                if (tokenInfo.attributes.symbol) realSymbol = tokenInfo.attributes.symbol;
-                if (tokenInfo.attributes.image_url && !tokenInfo.attributes.image_url.includes("missing")) {
-                    logoUrl = tokenInfo.attributes.image_url;
-                }
-            } catch (err) {}
-
+        if (dexRes.status === 'fulfilled' && dexRes.value.data.pairs?.length > 0) {
+            const bestPair = dexRes.value.data.pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
             tokenData = {
-                source: 'GeckoTerminal',
-                chainId: mapChainId(networkId),
-                contractAddress: cleanAddress,
-                name: attr.name ? attr.name.split(' / ')[0] : "Unknown",
-                symbol: realSymbol,
-                price: parseFloat(attr.base_token_price_usd ?? attr.price_usd ?? 0),
-                changePercent: parseFloat(attr.price_change_percentage?.h24 || 0),
-                imageName: logoUrl
+                source: 'DexScreener',
+                chainId: mapChainId(bestPair.chainId),
+                contractAddress: bestPair.baseToken.address,
+                name: bestPair.baseToken.name,
+                symbol: bestPair.baseToken.symbol,
+                price: parseFloat(bestPair.priceUsd || 0),
+                changePercent: parseFloat(bestPair.priceChange?.h24 || 0),
+                imageName: bestPair?.info?.imageUrl || "questionmark.circle"
             };
         }
-    } catch (error) {}
 
-    if (!tokenData || logoUrl === "questionmark.circle") {
-        try {
-            const dexUrl = `https://api.dexscreener.com/latest/dex/tokens/${cleanAddress}`;
-            const dexRes = await axios.get(dexUrl, { timeout: 5000 });
-            const pairs = dexRes.data.pairs || [];
-            
-            const bestPair = pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
-            const dataPair = bestPair || pairs[0];
-
-            if (dataPair) {
-                if (!tokenData) {
-                    tokenData = {
-                        source: 'DexScreener',
-                        chainId: mapChainId(dataPair.chainId),
-                        contractAddress: dataPair.baseToken.address,
-                        name: dataPair.baseToken.name,
-                        symbol: dataPair.baseToken.symbol,
-                        price: parseFloat(dataPair.priceUsd || 0),
-                        changePercent: dataPair.priceChange?.h24 || 0,
-                        imageName: bestPair?.info?.imageUrl || "questionmark.circle"
-                    };
-                }
-            }
-        } catch (dexErr) {}
+        if (!tokenData && geckoRes.status === 'fulfilled' && geckoRes.value.data.data?.[0]) {
+            const pool = geckoRes.value.data.data[0];
+            const attr = pool.attributes;
+            tokenData = {
+                source: 'GeckoTerminal',
+                chainId: mapChainId(pool.relationships.network.data.id),
+                contractAddress: cleanAddress,
+                name: attr.name?.split(' / ')[0] || "Unknown",
+                symbol: attr.base_token_symbol || "UNK",
+                price: parseFloat(attr.base_token_price_usd || 0),
+                changePercent: parseFloat(attr.price_change_percentage?.h24 || 0),
+                imageName: "questionmark.circle"
+            };
+        }
+    } catch (err) {
+        console.error("Search failed", err);
     }
 
     if (tokenData && (tokenData.imageName === "questionmark.circle" || !tokenData.imageName)) {
         const chainKey = chainNameMap[tokenData.chainId];
-        
         if (chainKey && cleanAddress.startsWith('0x')) {
-            const finalAddr = toChecksumAddress(cleanAddress);
-            tokenData.imageName = `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${chainKey}/assets/${finalAddr}/logo.png`;
+            tokenData.imageName = `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${chainKey}/assets/${toChecksumAddress(cleanAddress)}/logo.png`;
         }
     }
 
@@ -236,8 +211,13 @@ app.get('/api/search', async (req, res) => {
         cache.set(cleanAddress, tokenData, 600);
         return res.json(tokenData);
     }
-    return res.status(404).json({ error: 'Token not found' });
+    res.status(404).json({ error: 'Token not found' });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Fluxor Backend running on port ${PORT}`));
+
+
+
+
+

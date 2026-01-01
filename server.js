@@ -136,7 +136,7 @@ app.post('/api/portfolio/favorites', async (req, res) => {
             const data = await fetchLivePrice(t.chainId, t.address);
             if (data) {
                 response[t.address] = data;
-                cache.set(`fav:${t.chainId}:${t.normAddr}`, data, 60);
+                cache.set(`fav:${t.chainId}:${t.normAddr}`, data, 60); 
             }
         });
         await Promise.all(promises);

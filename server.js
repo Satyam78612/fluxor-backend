@@ -6,7 +6,7 @@ const cors = require('cors');
 const { getAddress } = require('ethers');
 
 const { startPriceService } = require('./priceService');
-const contractTokens = require('./Contract.json');
+const contractTokens = require('./tokens.json');
 
 const app = express();
 const cache = new NodeCache({ stdTTL: 60 });

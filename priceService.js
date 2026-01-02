@@ -20,7 +20,7 @@ const INTERVAL_MS = 300 * 1000;
 let JSON_TOKENS = [];
 
 try {
-    const contractPath = path.join(__dirname, 'Contract.json');
+    const contractPath = path.join(__dirname, 'tokens.json');
     if (fs.existsSync(contractPath)) {
         JSON_TOKENS = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
         console.log(`[PriceService] ✅ Loaded ${JSON_TOKENS.length} tokens`);

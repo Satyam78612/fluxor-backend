@@ -153,7 +153,8 @@ app.get('/api/search', async (req, res) => {
     const localMatch = contractTokens.find(t =>
         t.id.toLowerCase() === cleanQuery ||
         t.symbol.toLowerCase() === cleanQuery ||
-        t.name.toLowerCase().includes(cleanQuery)
+        t.name.toLowerCase().includes(cleanQuery) ||
+        (t.deployments && t.deployments.some(d => d.address.toLowerCase() === cleanQuery))
     );
 
     if (localMatch) {

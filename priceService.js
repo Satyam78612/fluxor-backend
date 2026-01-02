@@ -13,7 +13,7 @@ const TOP_COIN_IDS = [
     "starknet", "syrup", "pendle", "layerzero", "raydium", "eigenlayer"
 ];
 
-const DS_BATCH_SIZE = 40;
+const DS_BATCH_SIZE = 30;
 const DS_DELAY_MS = 1000;
 const INTERVAL_MS = 300 * 1000; 
 

@@ -14,7 +14,7 @@ const TOP_COIN_IDS = [
 ];
 
 const DS_BATCH_SIZE = 30;
-const DS_DELAY_MS = 1000;
+const DS_DELAY_MS = 3000;
 const INTERVAL_MS = 300 * 1000; 
 
 let JSON_TOKENS = [];
@@ -62,7 +62,7 @@ async function fetchDexScreenerPrices(tokens) {
         const addresses = batch.map(t => t.address).filter(a => a && a.length > 10).join(',');
         
         if (!addresses) continue;
-
+        
         try {
             const { data } = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${addresses}`, { timeout: 10000 });
             const pairs = data.pairs || [];
@@ -70,9 +70,9 @@ async function fetchDexScreenerPrices(tokens) {
             batch.forEach(token => {
                 const addr = token.address.toLowerCase();
                 
-                const tokenPairs = pairs.filter(p => 
-                    p.baseToken.address?.toLowerCase() === addr
-                );
+                const tokenPairs = pairs.filter(p =>
+                                                p.baseToken.address?.toLowerCase() === addr
+                                                );
                 
                 if (tokenPairs.length > 0) {
                     const bestPair = tokenPairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
@@ -85,8 +85,14 @@ async function fetchDexScreenerPrices(tokens) {
             });
             
             if (i + DS_BATCH_SIZE < tokens.length) await new Promise(r => setTimeout(r, DS_DELAY_MS));
-        } catch (err) { 
-            console.error(`[PriceService] DexScreener Batch Error: ${err.message}`); 
+            
+        } catch (err) {
+            if (err.response && err.response.status === 429) {
+                console.warn(`[PriceService] ⚠️ DexScreener Rate Limit (429) on batch ${i}. Pausing...`);
+                await new Promise(r => setTimeout(r, 5000));
+            } else {
+                console.error(`[PriceService] DexScreener Batch Error: ${err.message}`);
+            }
         }
     }
     return prices;

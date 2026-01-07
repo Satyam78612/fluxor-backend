@@ -11,7 +11,6 @@ import contractTokens from './tokens.json';
 dotenv.config();
 
 const app = express();
-
 const redisClient = createClient({
     url: process.env.REDIS_URL || 'redis://localhost:6379'
 });
@@ -21,11 +20,14 @@ redisClient.on('error', (err) => console.error('[Redis] Client Error', err));
 (async () => {
     await redisClient.connect();
     console.log('[Server] ✅ Connected to Redis');
+    
     startPriceService(redisClient);
 })();
 
 app.use(cors());
 app.use(express.json());
+
+// --- Interfaces ---
 
 interface TokenDeployment {
     address: string;
@@ -41,9 +43,9 @@ interface ContractToken {
 }
 
 interface PriceData {
-    usd: number;
-    usd_24h_change: number;
-    last_updated_at: number;
+    price: number;
+    change24h: number;
+    source: string;
 }
 
 interface FavoriteRequestItem {
@@ -66,13 +68,15 @@ interface InternalSearchData extends PublicSearchToken {
     _source?: string;
 }
 
+// --- Helper Functions ---
+
 function formatSearchResponse(data: any): PublicSearchToken {
     return {
         id: data.id || "unknown",
         name: data.name,
         symbol: data.symbol,
-        price: parseFloat(data.price || data.usd || '0'),
-        changePercent: parseFloat(data.changePercent || data.usd_24h_change || data.change24h || '0'),
+        price: parseFloat(data.price || '0'),
+        changePercent: parseFloat(data.changePercent || data.change24h || '0'),
         imageName: data.imageName || data.logo || "questionmark.circle"
     };
 }
@@ -111,9 +115,9 @@ function mapChainId(chainInput: string | number): number {
     return map[chainString] || 0;
 }
 
-const AXIOS_TIMEOUT = 5000;
+const AXIOS_TIMEOUT = 5000; 
 
-async function fetchLivePrice(chainId: number, address: string): Promise<any | null> {
+async function fetchLivePrice(chainId: number, address: string): Promise<PriceData | null> {
     const cleanAddress = normalizeAddress(chainId, address);
 
     const geckoNetworkMap: { [key: number]: string } = {
@@ -141,7 +145,7 @@ async function fetchLivePrice(chainId: number, address: string): Promise<any | n
         const attrs = geckoResult.data.data.attributes;
         return {
             price: parseFloat(attrs.price_usd || '0'),
-            changePercent: parseFloat(attrs.price_change_percentage?.h24 || '0'),
+            change24h: parseFloat(attrs.price_change_percentage?.h24 || '0'),
             source: 'GeckoTerminal'
         };
     }
@@ -151,12 +155,14 @@ async function fetchLivePrice(chainId: number, address: string): Promise<any | n
         const bestPair = pairs[0];
         return {
             price: parseFloat(bestPair.priceUsd || '0'),
-            changePercent: bestPair.priceChange?.h24 || 0,
+            change24h: bestPair.priceChange?.h24 || 0,
             source: 'DexScreener'
         };
     }
     return null;
 }
+
+// --- Routes ---
 
 app.get('/health', (_: Request, res: Response) => {
     res.json({ status: 'ok', uptime: process.uptime() });
@@ -183,12 +189,13 @@ app.post('/api/portfolio/favorites', async (req: Request, res: Response) => {
     
     if (!tokens || !Array.isArray(tokens)) return res.status(400).json({ error: "Invalid input" });
 
-    const response: Record<string, any> = {};
+    const response: Record<string, PriceData> = {};
     const missingTokens: (FavoriteRequestItem & { normAddr: string })[] = [];
 
     for (const t of tokens) {
         const normAddr = normalizeAddress(t.chainId, t.address);
-        const cacheKey = `fav_v3:${t.chainId}:${normAddr}`;
+        // FIX: Using v4 to clear any previous bad cache
+        const cacheKey = `fav_v4:${t.chainId}:${normAddr}`;
         
         const cachedValRaw = await redisClient.get(cacheKey);
 
@@ -204,7 +211,7 @@ app.post('/api/portfolio/favorites', async (req: Request, res: Response) => {
             const data = await fetchLivePrice(t.chainId, t.address);
             if (data) {
                 response[t.address] = data;
-                await redisClient.set(`fav_v3:${t.chainId}:${t.normAddr}`, JSON.stringify(data), { EX: 60 }); 
+                await redisClient.set(`fav_v4:${t.chainId}:${t.normAddr}`, JSON.stringify(data), { EX: 60 }); 
             }
         });
         await Promise.all(promises);
@@ -219,7 +226,8 @@ app.get('/api/search', async (req: Request, res: Response) => {
     const cleanQuery = address.trim().toLowerCase();
     const apiQuery = address.trim(); 
 
-    const cacheKey = `v3:${cleanQuery}`;
+    // ✅ FIX 1: New Cache Key (v4) to wipe old "Purple Coin" results
+    const cacheKey = `v4:${cleanQuery}`;
 
     const tokensList = contractTokens as ContractToken[];
     
@@ -253,16 +261,20 @@ app.get('/api/search', async (req: Request, res: Response) => {
     let tokenData: InternalSearchData | null = null;
 
     try {
-        const isLikelyAddress = apiQuery.length > 20;
+        // ✅ FIX 2: STRICT MODE
+        // If query is longer than 25 chars, we assume it's an Address.
+        // We FORCE Gecko to be skipped, so it can't return fuzzy matches.
+        const isLikelyAddress = apiQuery.length > 25;
 
         const [geckoRes, dexRes] = await Promise.allSettled([
             !isLikelyAddress 
                 ? axios.get(`https://api.geckoterminal.com/api/v2/search/pools?query=${apiQuery}`, { timeout: 4000 })
-                : Promise.reject("Skipped: Address Query"),
+                : Promise.reject("Skipped: Address Query"), // This prevents the bug!
             
             axios.get(`https://api.dexscreener.com/latest/dex/tokens/${apiQuery}`, { timeout: 4000 })
         ]);
 
+        // 1. Check DexScreener (The only source we trust for Addresses)
         if (dexRes.status === 'fulfilled' && dexRes.value.data.pairs?.length > 0) {
             const bestPair = dexRes.value.data.pairs.sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
             tokenData = {
@@ -278,6 +290,8 @@ app.get('/api/search', async (req: Request, res: Response) => {
             };
         }
 
+        // 2. Check GeckoTerminal (Only if it ran and returned valid data)
+        // Note: Since we skipped it for addresses, this block won't run for bad addresses.
         if (!tokenData && geckoRes.status === 'fulfilled' && geckoRes.value.data.data?.[0]) {
             const pool = geckoRes.value.data.data[0];
             const attr = pool.attributes;
@@ -308,6 +322,8 @@ app.get('/api/search', async (req: Request, res: Response) => {
         await redisClient.set(cacheKey, JSON.stringify(tokenData), { EX: 600 });
         return res.json(formatSearchResponse(tokenData));
     }
+    
+    // Correctly return 404 for bad addresses
     res.status(404).json({ error: 'Token not found' });
 });
 

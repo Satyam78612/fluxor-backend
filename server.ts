@@ -187,7 +187,7 @@ app.post('/api/portfolio/favorites', async (req: Request, res: Response) => {
 
     for (const t of tokens) {
         const normAddr = normalizeAddress(t.chainId, t.address);
-        const cacheKey = `fav:${t.chainId}:${normAddr}`;
+        const cacheKey = `fav_v2:${t.chainId}:${normAddr}`;
         
         const cachedValRaw = await redisClient.get(cacheKey);
 
@@ -203,7 +203,7 @@ app.post('/api/portfolio/favorites', async (req: Request, res: Response) => {
             const data = await fetchLivePrice(t.chainId, t.address);
             if (data) {
                 response[t.address] = data;
-                await redisClient.set(`fav:${t.chainId}:${t.normAddr}`, JSON.stringify(data), { EX: 60 }); 
+                await redisClient.set(`fav_v2:${t.chainId}:${t.normAddr}`, JSON.stringify(data), { EX: 60 }); 
             }
         });
         await Promise.all(promises);
@@ -216,8 +216,9 @@ app.get('/api/search', async (req: Request, res: Response) => {
     if (!address || typeof address !== 'string') return res.status(400).json({ error: 'Query is required' });
 
     const cleanQuery = address.trim().toLowerCase();
+    const apiQuery = address.trim(); 
 
-    const apiQuery = address.trim();
+    const cacheKey = `v2:${cleanQuery}`;
 
     const tokensList = contractTokens as ContractToken[];
     
@@ -243,7 +244,7 @@ app.get('/api/search', async (req: Request, res: Response) => {
         }));
     }
 
-    const cachedDataRaw = await redisClient.get(cleanQuery);
+    const cachedDataRaw = await redisClient.get(cacheKey);
     if (cachedDataRaw) {
         return res.json(formatSearchResponse(JSON.parse(cachedDataRaw)));
     }
@@ -298,7 +299,7 @@ app.get('/api/search', async (req: Request, res: Response) => {
     }
 
     if (tokenData) {
-        await redisClient.set(cleanQuery, JSON.stringify(tokenData), { EX: 600 });
+        await redisClient.set(cacheKey, JSON.stringify(tokenData), { EX: 600 });
         return res.json(formatSearchResponse(tokenData));
     }
     res.status(404).json({ error: 'Token not found' });

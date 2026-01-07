@@ -217,6 +217,8 @@ app.get('/api/search', async (req: Request, res: Response) => {
 
     const cleanQuery = address.trim().toLowerCase();
 
+    const apiQuery = address.trim();
+
     const tokensList = contractTokens as ContractToken[];
     
     const localMatch = tokensList.find(t =>
@@ -250,8 +252,8 @@ app.get('/api/search', async (req: Request, res: Response) => {
 
     try {
         const [geckoRes, dexRes] = await Promise.allSettled([
-            axios.get(`https://api.geckoterminal.com/api/v2/search/pools?query=${cleanQuery}`, { timeout: 4000 }),
-            axios.get(`https://api.dexscreener.com/latest/dex/tokens/${cleanQuery}`, { timeout: 4000 })
+            axios.get(`https://api.geckoterminal.com/api/v2/search/pools?query=${apiQuery}`, { timeout: 4000 }),
+            axios.get(`https://api.dexscreener.com/latest/dex/tokens/${apiQuery}`, { timeout: 4000 })
         ]);
 
         if (dexRes.status === 'fulfilled' && dexRes.value.data.pairs?.length > 0) {

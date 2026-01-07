@@ -11,6 +11,7 @@ import contractTokens from './tokens.json';
 dotenv.config();
 
 const app = express();
+
 const redisClient = createClient({
     url: process.env.REDIS_URL || 'redis://localhost:6379'
 });
@@ -20,14 +21,11 @@ redisClient.on('error', (err) => console.error('[Redis] Client Error', err));
 (async () => {
     await redisClient.connect();
     console.log('[Server] ✅ Connected to Redis');
-    
     startPriceService(redisClient);
 })();
 
 app.use(cors());
 app.use(express.json());
-
-// --- Interfaces ---
 
 interface TokenDeployment {
     address: string;
@@ -43,9 +41,9 @@ interface ContractToken {
 }
 
 interface PriceData {
-    price: number;
-    change24h: number;
-    source: string;
+    usd: number;
+    usd_24h_change: number;
+    last_updated_at: number;
 }
 
 interface FavoriteRequestItem {
@@ -68,22 +66,20 @@ interface InternalSearchData extends PublicSearchToken {
     _source?: string;
 }
 
-// --- Helper Functions ---
-
 function formatSearchResponse(data: any): PublicSearchToken {
     return {
         id: data.id || "unknown",
         name: data.name,
         symbol: data.symbol,
-        price: parseFloat(data.price || '0'),
-        changePercent: parseFloat(data.changePercent || data.change24h || '0'),
+        price: parseFloat(data.price || data.usd || '0'),
+        changePercent: parseFloat(data.changePercent || data.usd_24h_change || data.change24h || '0'),
         imageName: data.imageName || data.logo || "questionmark.circle"
     };
 }
 
 function normalizeAddress(chainId: number, address: string): string {
     if (!address) return "";
-    if (chainId === 101) return address.trim();
+    if (chainId === 101) return address.trim(); // Keep Solana case-sensitive
     try { return getAddress(address); } catch { return address.trim().toLowerCase(); }
 }
 
@@ -115,9 +111,9 @@ function mapChainId(chainInput: string | number): number {
     return map[chainString] || 0;
 }
 
-const AXIOS_TIMEOUT = 5000; 
+const AXIOS_TIMEOUT = 5000;
 
-async function fetchLivePrice(chainId: number, address: string): Promise<PriceData | null> {
+async function fetchLivePrice(chainId: number, address: string): Promise<any | null> {
     const cleanAddress = normalizeAddress(chainId, address);
 
     const geckoNetworkMap: { [key: number]: string } = {
@@ -145,7 +141,7 @@ async function fetchLivePrice(chainId: number, address: string): Promise<PriceDa
         const attrs = geckoResult.data.data.attributes;
         return {
             price: parseFloat(attrs.price_usd || '0'),
-            change24h: parseFloat(attrs.price_change_percentage?.h24 || '0'),
+            changePercent: parseFloat(attrs.price_change_percentage?.h24 || '0'),
             source: 'GeckoTerminal'
         };
     }
@@ -155,14 +151,12 @@ async function fetchLivePrice(chainId: number, address: string): Promise<PriceDa
         const bestPair = pairs[0];
         return {
             price: parseFloat(bestPair.priceUsd || '0'),
-            change24h: bestPair.priceChange?.h24 || 0,
+            changePercent: bestPair.priceChange?.h24 || 0,
             source: 'DexScreener'
         };
     }
     return null;
 }
-
-// --- Routes ---
 
 app.get('/health', (_: Request, res: Response) => {
     res.json({ status: 'ok', uptime: process.uptime() });
@@ -189,13 +183,12 @@ app.post('/api/portfolio/favorites', async (req: Request, res: Response) => {
     
     if (!tokens || !Array.isArray(tokens)) return res.status(400).json({ error: "Invalid input" });
 
-    const response: Record<string, PriceData> = {};
+    const response: Record<string, any> = {};
     const missingTokens: (FavoriteRequestItem & { normAddr: string })[] = [];
 
     for (const t of tokens) {
         const normAddr = normalizeAddress(t.chainId, t.address);
-        // FIX: Using v4 to clear any previous bad cache
-        const cacheKey = `fav_v4:${t.chainId}:${normAddr}`;
+        const cacheKey = `fav_v3:${t.chainId}:${normAddr}`;
         
         const cachedValRaw = await redisClient.get(cacheKey);
 
@@ -211,7 +204,7 @@ app.post('/api/portfolio/favorites', async (req: Request, res: Response) => {
             const data = await fetchLivePrice(t.chainId, t.address);
             if (data) {
                 response[t.address] = data;
-                await redisClient.set(`fav_v4:${t.chainId}:${t.normAddr}`, JSON.stringify(data), { EX: 60 }); 
+                await redisClient.set(`fav_v3:${t.chainId}:${t.normAddr}`, JSON.stringify(data), { EX: 60 }); 
             }
         });
         await Promise.all(promises);
@@ -223,19 +216,22 @@ app.get('/api/search', async (req: Request, res: Response) => {
     const { address } = req.query;
     if (!address || typeof address !== 'string') return res.status(400).json({ error: 'Query is required' });
 
-    const cleanQuery = address.trim().toLowerCase();
-    const apiQuery = address.trim(); 
+    const rawQuery = address.trim(); 
+    const lowerQuery = rawQuery.toLowerCase();
+    
+    const isSolana = rawQuery.length > 30 && !rawQuery.startsWith('0x');
 
-    // ✅ FIX 1: New Cache Key (v4) to wipe old "Purple Coin" results
-    const cacheKey = `v4:${cleanQuery}`;
+    const cacheKey = `v3:${isSolana ? rawQuery : lowerQuery}`;
 
     const tokensList = contractTokens as ContractToken[];
     
     const localMatch = tokensList.find(t =>
-        t.id.toLowerCase() === cleanQuery ||
-        t.symbol.toLowerCase() === cleanQuery ||
-        t.name.toLowerCase().includes(cleanQuery) ||
-        (t.deployments && t.deployments.some(d => d.address.toLowerCase() === cleanQuery))
+        t.id.toLowerCase() === lowerQuery ||
+        t.symbol.toLowerCase() === lowerQuery ||
+        t.name.toLowerCase().includes(lowerQuery) ||
+        (t.deployments && t.deployments.some(d => 
+            d.address === rawQuery || d.address.toLowerCase() === lowerQuery
+        ))
     );
 
     if (localMatch) {
@@ -255,26 +251,23 @@ app.get('/api/search', async (req: Request, res: Response) => {
 
     const cachedDataRaw = await redisClient.get(cacheKey);
     if (cachedDataRaw) {
+        res.setHeader('Cache-Control', 'no-store'); 
         return res.json(formatSearchResponse(JSON.parse(cachedDataRaw)));
     }
 
     let tokenData: InternalSearchData | null = null;
 
     try {
-        // ✅ FIX 2: STRICT MODE
-        // If query is longer than 25 chars, we assume it's an Address.
-        // We FORCE Gecko to be skipped, so it can't return fuzzy matches.
-        const isLikelyAddress = apiQuery.length > 25;
+        const isLikelyAddress = rawQuery.length > 20;
 
         const [geckoRes, dexRes] = await Promise.allSettled([
             !isLikelyAddress 
-                ? axios.get(`https://api.geckoterminal.com/api/v2/search/pools?query=${apiQuery}`, { timeout: 4000 })
-                : Promise.reject("Skipped: Address Query"), // This prevents the bug!
+                ? axios.get(`https://api.geckoterminal.com/api/v2/search/pools?query=${rawQuery}`, { timeout: 4000 })
+                : Promise.reject("Skipped: Address Query"),
             
-            axios.get(`https://api.dexscreener.com/latest/dex/tokens/${apiQuery}`, { timeout: 4000 })
+            axios.get(`https://api.dexscreener.com/latest/dex/tokens/${rawQuery}`, { timeout: 4000 })
         ]);
 
-        // 1. Check DexScreener (The only source we trust for Addresses)
         if (dexRes.status === 'fulfilled' && dexRes.value.data.pairs?.length > 0) {
             const bestPair = dexRes.value.data.pairs.sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
             tokenData = {
@@ -290,15 +283,13 @@ app.get('/api/search', async (req: Request, res: Response) => {
             };
         }
 
-        // 2. Check GeckoTerminal (Only if it ran and returned valid data)
-        // Note: Since we skipped it for addresses, this block won't run for bad addresses.
         if (!tokenData && geckoRes.status === 'fulfilled' && geckoRes.value.data.data?.[0]) {
             const pool = geckoRes.value.data.data[0];
             const attr = pool.attributes;
             tokenData = {
                 _source: 'GeckoTerminal',
                 _chainId: mapChainId(pool.relationships.network.data.id),
-                _contractAddress: cleanQuery,
+                _contractAddress: rawQuery, 
                 id: "unknown",
                 name: attr.name?.split(' / ')[0] || "Unknown",
                 symbol: attr.base_token_symbol || "UNK",
@@ -313,17 +304,18 @@ app.get('/api/search', async (req: Request, res: Response) => {
 
     if (tokenData && (tokenData.imageName === "questionmark.circle" || !tokenData.imageName)) {
         const chainKey = chainNameMap[tokenData._chainId || 0];
-        if (chainKey && cleanQuery.startsWith('0x')) {
-            tokenData.imageName = `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${chainKey}/assets/${toChecksumAddress(cleanQuery)}/logo.png`;
+        if (chainKey && rawQuery.startsWith('0x')) {
+            tokenData.imageName = `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${chainKey}/assets/${toChecksumAddress(rawQuery)}/logo.png`;
         }
     }
 
     if (tokenData) {
         await redisClient.set(cacheKey, JSON.stringify(tokenData), { EX: 600 });
+        res.setHeader('Cache-Control', 'no-store');
         return res.json(formatSearchResponse(tokenData));
     }
     
-    // Correctly return 404 for bad addresses
+    res.setHeader('Cache-Control', 'no-store');
     res.status(404).json({ error: 'Token not found' });
 });
 

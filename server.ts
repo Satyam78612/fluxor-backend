@@ -1,44 +1,36 @@
 import dotenv from 'dotenv';
 import express, { Request, Response } from 'express';
 import axios from 'axios';
-import { createClient } from 'redis'; 
+import { createClient } from 'redis';
 import cors from 'cors';
 import { getAddress } from 'ethers';
 
 import { startPriceService } from './priceService';
-import contractTokens from './tokens.json'; 
+import contractTokensRaw from './tokens.json';
 
 dotenv.config();
 
 const app = express();
+
+// Redis Client Setup
 const redisClient = createClient({
     url: process.env.REDIS_URL || 'redis://localhost:6379'
 });
 
-// 1. Better Error Handling for Redis (Prevents crashes)
-redisClient.on('error', (err) => console.error('[Redis] ⚠️ Connection Error:', err));
+redisClient.on('error', (err) => console.error('[Redis] Client Error', err));
 
-// 2. Connect without blocking server startup
 (async () => {
-    try {
-        await redisClient.connect();
-        console.log('[Server] ✅ Connected to Redis');
-        startPriceService(redisClient);
-    } catch (e) {
-        console.error('[Server] ❌ Failed to connect to Redis (Running in no-cache mode):', e);
-    }
+    await redisClient.connect();
+    console.log('[Server] ✅ Connected to Redis');
+    
+    // Pass the connected client to your price service
+    startPriceService(redisClient);
 })();
-
-// 3. Global Cache Busting (Prevents "Previous Token" bug)
-app.use((req, res, next) => {
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
-    next();
-});
 
 app.use(cors());
 app.use(express.json());
+
+// --- Types & Interfaces ---
 
 interface TokenDeployment {
     address: string;
@@ -53,6 +45,9 @@ interface ContractToken {
     deployments?: TokenDeployment[];
 }
 
+// Cast import to typed array
+const contractTokens = contractTokensRaw as ContractToken[];
+
 interface PriceData {
     price: number;
     change24h: number;
@@ -64,35 +59,23 @@ interface FavoriteRequestItem {
     address: string;
 }
 
-interface PublicSearchToken {
-    id: string;
+interface SearchResult {
+    source?: string;
+    chainId?: number;
+    contractAddress?: string;
+    id?: string;
     name: string;
     symbol: string;
     price: number;
-    changePercent: number; 
+    changePercent: number;
     imageName: string;
 }
 
-interface InternalSearchData extends PublicSearchToken {
-    _chainId?: number;
-    _contractAddress?: string;
-    _source?: string;
-}
-
-function formatSearchResponse(data: any): PublicSearchToken {
-    return {
-        id: data.id || "unknown",
-        name: data.name,
-        symbol: data.symbol,
-        price: parseFloat(data.price || '0'),
-        changePercent: parseFloat(data.changePercent || data.change24h || '0'),
-        imageName: data.imageName || data.logo || "questionmark.circle"
-    };
-}
+// --- Helper Functions ---
 
 function normalizeAddress(chainId: number, address: string): string {
     if (!address) return "";
-    if (chainId === 101) return address.trim(); // Solana is case-sensitive
+    if (chainId === 101) return address.trim();
     try { return getAddress(address); } catch { return address.trim().toLowerCase(); }
 }
 
@@ -170,19 +153,18 @@ async function fetchLivePrice(chainId: number, address: string): Promise<PriceDa
     return null;
 }
 
+// --- Routes ---
+
 app.get('/health', (_: Request, res: Response) => {
     res.json({ status: 'ok', uptime: process.uptime() });
 });
 
 app.get('/api/portfolio/prices', async (req: Request, res: Response) => {
-    // Gracefully handle missing Redis
-    if (!redisClient.isOpen) return res.json({});
-
+    // Redis: Get string, parse to JSON
     const pricesRaw = await redisClient.get("ALL_PRICES");
     const prices = pricesRaw ? JSON.parse(pricesRaw) : {};
     
     const { ids } = req.query;
-    
     if (ids && typeof ids === 'string') {
         const requestedIds = ids.split(',').map(i => i.trim().toLowerCase());
         const filtered: Record<string, any> = {};
@@ -193,28 +175,17 @@ app.get('/api/portfolio/prices', async (req: Request, res: Response) => {
 });
 
 app.post('/api/portfolio/favorites', async (req: Request, res: Response) => {
-    const body = req.body as { tokens?: FavoriteRequestItem[] };
-    const { tokens } = body;
-    
+    const { tokens } = req.body as { tokens: FavoriteRequestItem[] };
     if (!tokens || !Array.isArray(tokens)) return res.status(400).json({ error: "Invalid input" });
 
-    const response: Record<string, PriceData> = {};
+    const response: Record<string, any> = {};
     const missingTokens: (FavoriteRequestItem & { normAddr: string })[] = [];
-
-    // If Redis is down, just fetch live
-    if (!redisClient.isOpen) {
-        const promises = tokens.map(async (t) => {
-             const data = await fetchLivePrice(t.chainId, t.address);
-             if (data) response[t.address] = data;
-        });
-        await Promise.all(promises);
-        return res.json(response);
-    }
 
     for (const t of tokens) {
         const normAddr = normalizeAddress(t.chainId, t.address);
         const cacheKey = `fav:${t.chainId}:${normAddr}`;
         
+        // Redis check
         const cachedValRaw = await redisClient.get(cacheKey);
 
         if (cachedValRaw) {
@@ -229,6 +200,7 @@ app.post('/api/portfolio/favorites', async (req: Request, res: Response) => {
             const data = await fetchLivePrice(t.chainId, t.address);
             if (data) {
                 response[t.address] = data;
+                // Redis set with Expiry (60s)
                 await redisClient.set(`fav:${t.chainId}:${t.normAddr}`, JSON.stringify(data), { EX: 60 }); 
             }
         });
@@ -238,76 +210,57 @@ app.post('/api/portfolio/favorites', async (req: Request, res: Response) => {
 });
 
 app.get('/api/search', async (req: Request, res: Response) => {
-    // Headers are already set by global middleware, but double check doesn't hurt
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-
     const { address } = req.query;
     if (!address || typeof address !== 'string') return res.status(400).json({ error: 'Query is required' });
 
-    const rawQuery = address.trim(); 
-    const lowerQuery = rawQuery.toLowerCase();
-    
-    // Detect Solana (Base58) vs EVM (0x)
-    const isSolana = rawQuery.length > 30 && !rawQuery.startsWith('0x');
-    const cacheKey = isSolana ? rawQuery : lowerQuery;
+    const cleanQuery = address.trim().toLowerCase();
 
-    const tokensList = contractTokens as ContractToken[];
-
-    // Local Lookup
-    const localMatch = tokensList.find(t =>
-        t.id.toLowerCase() === lowerQuery ||
-        t.symbol.toLowerCase() === lowerQuery ||
-        t.name.toLowerCase().includes(lowerQuery) ||
-        (t.deployments && t.deployments.some(d => 
-            d.address === rawQuery || d.address.toLowerCase() === lowerQuery
-        ))
+    // 1. Check Local Tokens.json
+    const localMatch = contractTokens.find(t =>
+        t.id.toLowerCase() === cleanQuery ||
+        t.symbol.toLowerCase() === cleanQuery ||
+        t.name.toLowerCase().includes(cleanQuery) ||
+        (t.deployments && t.deployments.some(d => d.address.toLowerCase() === cleanQuery))
     );
 
     if (localMatch) {
-        let priceInfo: any = {};
-        if (redisClient.isOpen) {
-            const pricesRaw = await redisClient.get("ALL_PRICES");
-            const allPrices = pricesRaw ? JSON.parse(pricesRaw) : {};
-            priceInfo = allPrices[localMatch.id] || {};
-        }
+        const pricesRaw = await redisClient.get("ALL_PRICES");
+        const allPrices = pricesRaw ? JSON.parse(pricesRaw) : {};
+        const priceInfo = allPrices[localMatch.id] || {};
 
-        return res.json(formatSearchResponse({
+        return res.json({
+            source: 'BackendJSON',
             id: localMatch.id,
             name: localMatch.name,
             symbol: localMatch.symbol,
-            price: priceInfo.usd,
-            changePercent: priceInfo.usd_24h_change, 
-            imageName: localMatch.logo
-        }));
+            price: parseFloat(priceInfo.usd || '0'),
+            changePercent: parseFloat(priceInfo.usd_24h_change || '0'),
+            imageName: localMatch.logo || "questionmark.circle"
+        });
     }
 
-    // Check Redis Cache
-    if (redisClient.isOpen) {
-        const cachedDataRaw = await redisClient.get(cacheKey);
-        if (cachedDataRaw) {
-            return res.json(formatSearchResponse(JSON.parse(cachedDataRaw)));
-        }
-    }
+    // 2. Check Redis Cache for Search Query
+    const cachedDataRaw = await redisClient.get(cleanQuery);
+    if (cachedDataRaw) return res.json(JSON.parse(cachedDataRaw));
 
-    let tokenData: InternalSearchData | null = null;
+    let tokenData: SearchResult | null = null;
 
     try {
         const [geckoRes, dexRes] = await Promise.allSettled([
-            axios.get(`https://api.geckoterminal.com/api/v2/search/pools?query=${rawQuery}`, { timeout: 4000 }),
-            axios.get(`https://api.dexscreener.com/latest/dex/tokens/${rawQuery}`, { timeout: 4000 })
+            axios.get(`https://api.geckoterminal.com/api/v2/search/pools?query=${cleanQuery}`, { timeout: 4000 }),
+            axios.get(`https://api.dexscreener.com/latest/dex/tokens/${cleanQuery}`, { timeout: 4000 })
         ]);
 
         if (dexRes.status === 'fulfilled' && dexRes.value.data.pairs?.length > 0) {
             const bestPair = dexRes.value.data.pairs.sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
             tokenData = {
-                _source: 'DexScreener',
-                _chainId: mapChainId(bestPair.chainId),
-                _contractAddress: bestPair.baseToken.address,
-                id: "unknown",
+                source: 'DexScreener',
+                chainId: mapChainId(bestPair.chainId),
+                contractAddress: bestPair.baseToken.address,
                 name: bestPair.baseToken.name,
                 symbol: bestPair.baseToken.symbol,
                 price: parseFloat(bestPair.priceUsd || '0'),
-                changePercent: parseFloat(bestPair.priceChange?.h24 || 0), 
+                changePercent: parseFloat(bestPair.priceChange?.h24 || 0),
                 imageName: bestPair?.info?.imageUrl || "questionmark.circle"
             };
         }
@@ -316,14 +269,13 @@ app.get('/api/search', async (req: Request, res: Response) => {
             const pool = geckoRes.value.data.data[0];
             const attr = pool.attributes;
             tokenData = {
-                _source: 'GeckoTerminal',
-                _chainId: mapChainId(pool.relationships.network.data.id),
-                _contractAddress: rawQuery,
-                id: "unknown",
+                source: 'GeckoTerminal',
+                chainId: mapChainId(pool.relationships.network.data.id),
+                contractAddress: cleanQuery,
                 name: attr.name?.split(' / ')[0] || "Unknown",
                 symbol: attr.base_token_symbol || "UNK",
                 price: parseFloat(attr.base_token_price_usd || '0'),
-                changePercent: parseFloat(attr.price_change_percentage?.h24 || 0), 
+                changePercent: parseFloat(attr.price_change_percentage?.h24 || 0),
                 imageName: "questionmark.circle"
             };
         }
@@ -332,35 +284,18 @@ app.get('/api/search', async (req: Request, res: Response) => {
     }
 
     if (tokenData && (tokenData.imageName === "questionmark.circle" || !tokenData.imageName)) {
-        const chainKey = chainNameMap[tokenData._chainId || 0];
-        if (chainKey && rawQuery.startsWith('0x')) {
-            tokenData.imageName = `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${chainKey}/assets/${toChecksumAddress(rawQuery)}/logo.png`;
+        const chainKey = chainNameMap[tokenData.chainId || 0];
+        if (chainKey && cleanQuery.startsWith('0x')) {
+            tokenData.imageName = `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${chainKey}/assets/${toChecksumAddress(cleanQuery)}/logo.png`;
         }
     }
 
     if (tokenData) {
-        if (redisClient.isOpen) {
-            await redisClient.set(cacheKey, JSON.stringify(tokenData), { EX: 600 });
-        }
-        return res.json(formatSearchResponse(tokenData));
+        // Cache result in Redis for 600s
+        await redisClient.set(cleanQuery, JSON.stringify(tokenData), { EX: 600 });
+        return res.json(tokenData);
     }
-    
     res.status(404).json({ error: 'Token not found' });
-});
-
-// 4. Safe Manual Flush Endpoint
-app.get('/api/debug/flush', async (req: Request, res: Response) => {
-    try {
-        if (!redisClient.isOpen) {
-            return res.status(503).json({ error: 'Redis is not connected' });
-        }
-        await redisClient.flushAll();
-        console.log('[Redis] 🧹 Cache Flushed Manually');
-        res.json({ status: 'success', message: 'Redis Cache Cleared!' });
-    } catch (error: any) {
-        console.error("Flush Error:", error);
-        res.status(500).json({ error: 'Failed to flush cache', details: error.message });
-    }
 });
 
 const PORT = process.env.PORT || 3000;

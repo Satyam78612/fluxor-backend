@@ -15,15 +15,21 @@ const redisClient = createClient({
     url: process.env.REDIS_URL || 'redis://localhost:6379'
 });
 
-redisClient.on('error', (err) => console.error('[Redis] Client Error', err));
+// 1. Better Error Handling for Redis (Prevents crashes)
+redisClient.on('error', (err) => console.error('[Redis] ⚠️ Connection Error:', err));
 
+// 2. Connect without blocking server startup
 (async () => {
-    await redisClient.connect();
-    console.log('[Server] ✅ Connected to Redis');
-    
-    startPriceService(redisClient);
+    try {
+        await redisClient.connect();
+        console.log('[Server] ✅ Connected to Redis');
+        startPriceService(redisClient);
+    } catch (e) {
+        console.error('[Server] ❌ Failed to connect to Redis (Running in no-cache mode):', e);
+    }
 })();
 
+// 3. Global Cache Busting (Prevents "Previous Token" bug)
 app.use((req, res, next) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
@@ -86,7 +92,7 @@ function formatSearchResponse(data: any): PublicSearchToken {
 
 function normalizeAddress(chainId: number, address: string): string {
     if (!address) return "";
-    if (chainId === 101) return address.trim(); 
+    if (chainId === 101) return address.trim(); // Solana is case-sensitive
     try { return getAddress(address); } catch { return address.trim().toLowerCase(); }
 }
 
@@ -169,6 +175,9 @@ app.get('/health', (_: Request, res: Response) => {
 });
 
 app.get('/api/portfolio/prices', async (req: Request, res: Response) => {
+    // Gracefully handle missing Redis
+    if (!redisClient.isOpen) return res.json({});
+
     const pricesRaw = await redisClient.get("ALL_PRICES");
     const prices = pricesRaw ? JSON.parse(pricesRaw) : {};
     
@@ -191,6 +200,16 @@ app.post('/api/portfolio/favorites', async (req: Request, res: Response) => {
 
     const response: Record<string, PriceData> = {};
     const missingTokens: (FavoriteRequestItem & { normAddr: string })[] = [];
+
+    // If Redis is down, just fetch live
+    if (!redisClient.isOpen) {
+        const promises = tokens.map(async (t) => {
+             const data = await fetchLivePrice(t.chainId, t.address);
+             if (data) response[t.address] = data;
+        });
+        await Promise.all(promises);
+        return res.json(response);
+    }
 
     for (const t of tokens) {
         const normAddr = normalizeAddress(t.chainId, t.address);
@@ -219,6 +238,7 @@ app.post('/api/portfolio/favorites', async (req: Request, res: Response) => {
 });
 
 app.get('/api/search', async (req: Request, res: Response) => {
+    // Headers are already set by global middleware, but double check doesn't hurt
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
 
     const { address } = req.query;
@@ -226,11 +246,14 @@ app.get('/api/search', async (req: Request, res: Response) => {
 
     const rawQuery = address.trim(); 
     const lowerQuery = rawQuery.toLowerCase();
+    
+    // Detect Solana (Base58) vs EVM (0x)
     const isSolana = rawQuery.length > 30 && !rawQuery.startsWith('0x');
     const cacheKey = isSolana ? rawQuery : lowerQuery;
 
     const tokensList = contractTokens as ContractToken[];
 
+    // Local Lookup
     const localMatch = tokensList.find(t =>
         t.id.toLowerCase() === lowerQuery ||
         t.symbol.toLowerCase() === lowerQuery ||
@@ -241,9 +264,12 @@ app.get('/api/search', async (req: Request, res: Response) => {
     );
 
     if (localMatch) {
-        const pricesRaw = await redisClient.get("ALL_PRICES");
-        const allPrices = pricesRaw ? JSON.parse(pricesRaw) : {};
-        const priceInfo = allPrices[localMatch.id] || {};
+        let priceInfo: any = {};
+        if (redisClient.isOpen) {
+            const pricesRaw = await redisClient.get("ALL_PRICES");
+            const allPrices = pricesRaw ? JSON.parse(pricesRaw) : {};
+            priceInfo = allPrices[localMatch.id] || {};
+        }
 
         return res.json(formatSearchResponse({
             id: localMatch.id,
@@ -255,9 +281,12 @@ app.get('/api/search', async (req: Request, res: Response) => {
         }));
     }
 
-    const cachedDataRaw = await redisClient.get(cacheKey);
-    if (cachedDataRaw) {
-        return res.json(formatSearchResponse(JSON.parse(cachedDataRaw)));
+    // Check Redis Cache
+    if (redisClient.isOpen) {
+        const cachedDataRaw = await redisClient.get(cacheKey);
+        if (cachedDataRaw) {
+            return res.json(formatSearchResponse(JSON.parse(cachedDataRaw)));
+        }
     }
 
     let tokenData: InternalSearchData | null = null;
@@ -310,20 +339,27 @@ app.get('/api/search', async (req: Request, res: Response) => {
     }
 
     if (tokenData) {
-        await redisClient.set(cacheKey, JSON.stringify(tokenData), { EX: 600 });
+        if (redisClient.isOpen) {
+            await redisClient.set(cacheKey, JSON.stringify(tokenData), { EX: 600 });
+        }
         return res.json(formatSearchResponse(tokenData));
     }
     
     res.status(404).json({ error: 'Token not found' });
 });
 
+// 4. Safe Manual Flush Endpoint
 app.get('/api/debug/flush', async (req: Request, res: Response) => {
     try {
+        if (!redisClient.isOpen) {
+            return res.status(503).json({ error: 'Redis is not connected' });
+        }
         await redisClient.flushAll();
         console.log('[Redis] 🧹 Cache Flushed Manually');
         res.json({ status: 'success', message: 'Redis Cache Cleared!' });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to flush cache' });
+    } catch (error: any) {
+        console.error("Flush Error:", error);
+        res.status(500).json({ error: 'Failed to flush cache', details: error.message });
     }
 });
 

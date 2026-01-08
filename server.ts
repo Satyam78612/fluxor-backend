@@ -24,6 +24,13 @@ redisClient.on('error', (err) => console.error('[Redis] Client Error', err));
     startPriceService(redisClient);
 })();
 
+app.use((req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    next();
+});
+
 app.use(cors());
 app.use(express.json());
 
@@ -79,7 +86,7 @@ function formatSearchResponse(data: any): PublicSearchToken {
 
 function normalizeAddress(chainId: number, address: string): string {
     if (!address) return "";
-    if (chainId === 101) return address.trim();
+    if (chainId === 101) return address.trim(); 
     try { return getAddress(address); } catch { return address.trim().toLowerCase(); }
 }
 
@@ -223,7 +230,7 @@ app.get('/api/search', async (req: Request, res: Response) => {
     const cacheKey = isSolana ? rawQuery : lowerQuery;
 
     const tokensList = contractTokens as ContractToken[];
-    
+
     const localMatch = tokensList.find(t =>
         t.id.toLowerCase() === lowerQuery ||
         t.symbol.toLowerCase() === lowerQuery ||
@@ -308,6 +315,16 @@ app.get('/api/search', async (req: Request, res: Response) => {
     }
     
     res.status(404).json({ error: 'Token not found' });
+});
+
+app.get('/api/debug/flush', async (req: Request, res: Response) => {
+    try {
+        await redisClient.flushAll();
+        console.log('[Redis] 🧹 Cache Flushed Manually');
+        res.json({ status: 'success', message: 'Redis Cache Cleared!' });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to flush cache' });
+    }
 });
 
 const PORT = process.env.PORT || 3000;

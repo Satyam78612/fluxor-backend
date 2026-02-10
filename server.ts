@@ -111,6 +111,11 @@ async function fetchLivePrice(chainId: number, address: string): Promise<PriceDa
     const cleanAddress = normalizeAddress(chainId, address);
     const AXIOS_TIMEOUT = 3000;
 
+    const HEADERS = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json'
+    };
+
     const geckoNetworkMap: { [key: number]: string } = {
         1: 'eth', 56: 'bsc', 137: 'polygon_pos', 10: 'optimism',
         42161: 'arbitrum', 8453: 'base', 43114: 'avax', 101: 'solana',
@@ -121,14 +126,20 @@ async function fetchLivePrice(chainId: number, address: string): Promise<PriceDa
 
     const geckoPromise = network ? axios.get(
         `https://api.geckoterminal.com/api/v2/networks/${network}/tokens/${cleanAddress}`,
-        { timeout: AXIOS_TIMEOUT }
-    ).then(res => ({ source: 'gecko', data: res.data, error: false })).catch(() => ({ error: true, data: null }))
+        { timeout: AXIOS_TIMEOUT, headers: HEADERS } 
+    ).then(res => ({ source: 'gecko', data: res.data, error: false })).catch((err) => {
+        console.log(`[Gecko Error] ${err.response?.status}`); 
+        return { error: true, data: null };
+    })
     : Promise.resolve({ error: true, data: null });
 
     const dexPromise = axios.get(
         `https://api.dexscreener.com/latest/dex/tokens/${cleanAddress}`,
-        { timeout: AXIOS_TIMEOUT }
-    ).then(res => ({ source: 'dex', data: res.data, error: false })).catch(() => ({ error: true, data: null }));
+        { timeout: AXIOS_TIMEOUT, headers: HEADERS } 
+    ).then(res => ({ source: 'dex', data: res.data, error: false })).catch((err) => {
+        console.log(`[Dex Error] ${err.response?.status}`); 
+        return { error: true, data: null };
+    });
 
     const [geckoResult, dexResult] = await Promise.all([geckoPromise, dexPromise]);
 
@@ -246,9 +257,21 @@ app.get('/api/search', async (req: Request, res: Response) => {
     let tokenData: SearchResult | null = null;
 
     try {
+        // --- FIX: Add Browser Headers ---
+        const HEADERS = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json'
+        };
+
         const [geckoRes, dexRes] = await Promise.allSettled([
-            axios.get(`https://api.geckoterminal.com/api/v2/search/pools?query=${cleanQuery}`, { timeout: 4000 }),
-            axios.get(`https://api.dexscreener.com/latest/dex/tokens/${cleanQuery}`, { timeout: 4000 })
+            axios.get(`https://api.geckoterminal.com/api/v2/search/pools?query=${cleanQuery}`, { 
+                timeout: 4000, 
+                headers: HEADERS // <--- ADDED HEADERS
+            }),
+            axios.get(`https://api.dexscreener.com/latest/dex/tokens/${cleanQuery}`, { 
+                timeout: 4000, 
+                headers: HEADERS // <--- ADDED HEADERS
+            })
         ]);
 
         if (dexRes.status === 'fulfilled' && dexRes.value.data.pairs?.length > 0) {

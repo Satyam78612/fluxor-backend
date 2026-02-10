@@ -84,6 +84,24 @@ function toChecksumAddress(address: string): string {
     try { return getAddress(address); } catch (error) { return address; }
 }
 
+// --- NEW: Retry Logic for 429 Errors ---
+async function fetchWithRetry(url: string, options: any, retries = 3, delay = 1000) {
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await axios.get(url, options);
+        } catch (err: any) {
+            // If error is 429 (Rate Limit) and we have retries left
+            if (err.response?.status === 429 && i < retries - 1) {
+                console.log(`⚠️ Rate Limited (429). Retrying in ${delay}ms...`);
+                await new Promise(res => setTimeout(res, delay));
+                delay *= 2; // Wait longer next time (1s, 2s, 4s)
+                continue;
+            }
+            throw err; // Throw other errors immediately
+        }
+    }
+}
+
 const chainNameMap: { [key: number]: string } = {
     1: 'ethereum', 56: 'smartchain', 137: 'polygon', 10: 'optimism',
     42161: 'arbitrum', 8453: 'base', 43114: 'avalanchec', 101: 'solana',
@@ -109,9 +127,8 @@ function mapChainId(chainInput: string | number): number {
 
 async function fetchLivePrice(chainId: number, address: string): Promise<PriceData | null> {
     const cleanAddress = normalizeAddress(chainId, address);
-    const AXIOS_TIMEOUT = 3000;
+    const AXIOS_TIMEOUT = 5000; // Increased timeout
 
-    // FIX 1: Headers added here
     const HEADERS = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'application/json'
@@ -125,19 +142,20 @@ async function fetchLivePrice(chainId: number, address: string): Promise<PriceDa
     };
     const network = geckoNetworkMap[chainId];
 
-    const geckoPromise = network ? axios.get(
+    // Use fetchWithRetry instead of axios.get
+    const geckoPromise = network ? fetchWithRetry(
         `https://api.geckoterminal.com/api/v2/networks/${network}/tokens/${cleanAddress}`,
         { timeout: AXIOS_TIMEOUT, headers: HEADERS } 
-    ).then(res => ({ source: 'gecko', data: res.data, error: false })).catch((err) => {
+    ).then((res: any) => ({ source: 'gecko', data: res.data, error: false })).catch((err: any) => {
         console.log(`[Gecko Error] ${err.response?.status}`); 
         return { error: true, data: null };
     })
     : Promise.resolve({ error: true, data: null });
 
-    const dexPromise = axios.get(
+    const dexPromise = fetchWithRetry(
         `https://api.dexscreener.com/latest/dex/tokens/${cleanAddress}`,
         { timeout: AXIOS_TIMEOUT, headers: HEADERS } 
-    ).then(res => ({ source: 'dex', data: res.data, error: false })).catch((err) => {
+    ).then((res: any) => ({ source: 'dex', data: res.data, error: false })).catch((err: any) => {
         console.log(`[Dex Error] ${err.response?.status}`); 
         return { error: true, data: null };
     });
@@ -225,11 +243,9 @@ app.get('/api/search', async (req: Request, res: Response) => {
     const { address } = req.query;
     if (!address || typeof address !== 'string') return res.status(400).json({ error: 'Query is required' });
 
-    // FIX 2: Removed .toLowerCase() to allow Solana/Base58 addresses
     const cleanQuery = address.trim();
 
     // 1. Check Local Tokens.json
-    // Use lowercase ONLY for local comparisons (case-insensitive search)
     const queryLower = cleanQuery.toLowerCase();
     const localMatch = contractTokens.find(t =>
         t.id.toLowerCase() === queryLower ||
@@ -261,43 +277,39 @@ app.get('/api/search', async (req: Request, res: Response) => {
     let tokenData: SearchResult | null = null;
 
     try {
-        // FIX 3: Added Headers to Search
         const HEADERS = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'application/json'
         };
 
         const [geckoRes, dexRes] = await Promise.allSettled([
-            axios.get(`https://api.geckoterminal.com/api/v2/search/pools?query=${cleanQuery}`, { 
-                timeout: 4000, 
+            fetchWithRetry(`https://api.geckoterminal.com/api/v2/search/pools?query=${cleanQuery}`, { 
+                timeout: 5000, 
                 headers: HEADERS 
             }),
-            axios.get(`https://api.dexscreener.com/latest/dex/tokens/${cleanQuery}`, { 
-                timeout: 4000, 
+            fetchWithRetry(`https://api.dexscreener.com/latest/dex/tokens/${cleanQuery}`, { 
+                timeout: 5000, 
                 headers: HEADERS 
             })
         ]);
 
-        // FIX 4: Added Debug Logging & 'as any' casting to fix TS errors
         if (dexRes.status === 'rejected') {
             const reason = dexRes.reason as any;
             console.error("❌ DexScreener Failed:", reason?.message);
             if (reason?.response) {
                  console.error("   Status:", reason.response.status);
-                 console.error("   Data:", JSON.stringify(reason.response.data));
+                 // If 429 persists after retry, it's a hard limit.
             }
         }
 
         if (geckoRes.status === 'rejected') {
             const reason = geckoRes.reason as any;
             console.error("❌ GeckoTerminal Failed:", reason?.message);
-             if (reason?.response) {
-                 console.error("   Status:", reason.response.status);
-            }
         }
 
-        if (dexRes.status === 'fulfilled' && dexRes.value.data.pairs?.length > 0) {
-            const bestPair = dexRes.value.data.pairs.sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+        if (dexRes.status === 'fulfilled' && (dexRes.value as any).data.pairs?.length > 0) {
+            const data = (dexRes.value as any).data;
+            const bestPair = data.pairs.sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
             tokenData = {
                 source: 'DexScreener',
                 chainId: mapChainId(bestPair.chainId),
@@ -310,8 +322,9 @@ app.get('/api/search', async (req: Request, res: Response) => {
             };
         }
 
-        if (!tokenData && geckoRes.status === 'fulfilled' && geckoRes.value.data.data?.[0]) {
-            const pool = geckoRes.value.data.data[0];
+        if (!tokenData && geckoRes.status === 'fulfilled' && (geckoRes.value as any).data.data?.[0]) {
+            const data = (geckoRes.value as any).data;
+            const pool = data.data[0];
             const attr = pool.attributes;
             tokenData = {
                 source: 'GeckoTerminal',
@@ -336,7 +349,6 @@ app.get('/api/search', async (req: Request, res: Response) => {
     }
 
     if (tokenData) {
-        // Cache result in Redis for 600s
         await redisClient.set(cleanQuery, JSON.stringify(tokenData), { EX: 600 });
         return res.json(tokenData);
     }

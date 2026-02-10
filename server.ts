@@ -111,6 +111,7 @@ async function fetchLivePrice(chainId: number, address: string): Promise<PriceDa
     const cleanAddress = normalizeAddress(chainId, address);
     const AXIOS_TIMEOUT = 3000;
 
+    // FIX 1: Headers added here
     const HEADERS = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'application/json'
@@ -224,11 +225,11 @@ app.get('/api/search', async (req: Request, res: Response) => {
     const { address } = req.query;
     if (!address || typeof address !== 'string') return res.status(400).json({ error: 'Query is required' });
 
-    // FIX: Removed .toLowerCase() to support Solana/Base58 addresses
+    // FIX 2: Removed .toLowerCase() to allow Solana/Base58 addresses
     const cleanQuery = address.trim();
 
     // 1. Check Local Tokens.json
-    // We use a lowercased version for local comparison to handle case-insensitive searching for symbols (e.g. "BTC")
+    // Use lowercase ONLY for local comparisons (case-insensitive search)
     const queryLower = cleanQuery.toLowerCase();
     const localMatch = contractTokens.find(t =>
         t.id.toLowerCase() === queryLower ||
@@ -253,14 +254,14 @@ app.get('/api/search', async (req: Request, res: Response) => {
         });
     }
 
-    // 2. Check Redis Cache for Search Query
+    // 2. Check Redis Cache
     const cachedDataRaw = await redisClient.get(cleanQuery);
     if (cachedDataRaw) return res.json(JSON.parse(cachedDataRaw));
 
     let tokenData: SearchResult | null = null;
 
     try {
-        // --- FIX: Add Browser Headers ---
+        // FIX 3: Added Headers to Search
         const HEADERS = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'application/json'
@@ -277,9 +278,8 @@ app.get('/api/search', async (req: Request, res: Response) => {
             })
         ]);
 
-        // --- DEBUGGING: PRINT REAL ERRORS ---
+        // FIX 4: Added Debug Logging & 'as any' casting to fix TS errors
         if (dexRes.status === 'rejected') {
-            // Fix: Cast to 'any' to avoid TypeScript "Property 'message' does not exist on type 'unknown'"
             const reason = dexRes.reason as any;
             console.error("❌ DexScreener Failed:", reason?.message);
             if (reason?.response) {
@@ -295,7 +295,6 @@ app.get('/api/search', async (req: Request, res: Response) => {
                  console.error("   Status:", reason.response.status);
             }
         }
-        // ------------------------------------
 
         if (dexRes.status === 'fulfilled' && dexRes.value.data.pairs?.length > 0) {
             const bestPair = dexRes.value.data.pairs.sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];

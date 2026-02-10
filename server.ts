@@ -224,7 +224,7 @@ app.get('/api/search', async (req: Request, res: Response) => {
     const { address } = req.query;
     if (!address || typeof address !== 'string') return res.status(400).json({ error: 'Query is required' });
 
-    const cleanQuery = address.trim().toLowerCase();
+    const cleanQuery = address.trim();
 
     // 1. Check Local Tokens.json
     const localMatch = contractTokens.find(t =>

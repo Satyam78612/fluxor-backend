@@ -224,14 +224,17 @@ app.get('/api/search', async (req: Request, res: Response) => {
     const { address } = req.query;
     if (!address || typeof address !== 'string') return res.status(400).json({ error: 'Query is required' });
 
+    // FIX: Removed .toLowerCase() to support Solana/Base58 addresses
     const cleanQuery = address.trim();
 
     // 1. Check Local Tokens.json
+    // We use a lowercased version for local comparison to handle case-insensitive searching for symbols (e.g. "BTC")
+    const queryLower = cleanQuery.toLowerCase();
     const localMatch = contractTokens.find(t =>
-        t.id.toLowerCase() === cleanQuery ||
-        t.symbol.toLowerCase() === cleanQuery ||
-        t.name.toLowerCase().includes(cleanQuery) ||
-        (t.deployments && t.deployments.some(d => d.address.toLowerCase() === cleanQuery))
+        t.id.toLowerCase() === queryLower ||
+        t.symbol.toLowerCase() === queryLower ||
+        t.name.toLowerCase().includes(queryLower) ||
+        (t.deployments && t.deployments.some(d => d.address.toLowerCase() === queryLower))
     );
 
     if (localMatch) {
@@ -276,17 +279,20 @@ app.get('/api/search', async (req: Request, res: Response) => {
 
         // --- DEBUGGING: PRINT REAL ERRORS ---
         if (dexRes.status === 'rejected') {
-            console.error("❌ DexScreener Failed:", dexRes.reason?.message);
-            if (dexRes.reason?.response) {
-                 console.error("   Status:", dexRes.reason.response.status);
-                 console.error("   Data:", JSON.stringify(dexRes.reason.response.data));
+            // Fix: Cast to 'any' to avoid TypeScript "Property 'message' does not exist on type 'unknown'"
+            const reason = dexRes.reason as any;
+            console.error("❌ DexScreener Failed:", reason?.message);
+            if (reason?.response) {
+                 console.error("   Status:", reason.response.status);
+                 console.error("   Data:", JSON.stringify(reason.response.data));
             }
         }
 
         if (geckoRes.status === 'rejected') {
-            console.error("❌ GeckoTerminal Failed:", geckoRes.reason?.message);
-             if (geckoRes.reason?.response) {
-                 console.error("   Status:", geckoRes.reason.response.status);
+            const reason = geckoRes.reason as any;
+            console.error("❌ GeckoTerminal Failed:", reason?.message);
+             if (reason?.response) {
+                 console.error("   Status:", reason.response.status);
             }
         }
         // ------------------------------------

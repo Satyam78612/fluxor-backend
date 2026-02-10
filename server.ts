@@ -266,13 +266,30 @@ app.get('/api/search', async (req: Request, res: Response) => {
         const [geckoRes, dexRes] = await Promise.allSettled([
             axios.get(`https://api.geckoterminal.com/api/v2/search/pools?query=${cleanQuery}`, { 
                 timeout: 4000, 
-                headers: HEADERS // <--- ADDED HEADERS
+                headers: HEADERS 
             }),
             axios.get(`https://api.dexscreener.com/latest/dex/tokens/${cleanQuery}`, { 
                 timeout: 4000, 
-                headers: HEADERS // <--- ADDED HEADERS
+                headers: HEADERS 
             })
         ]);
+
+        // --- DEBUGGING: PRINT REAL ERRORS ---
+        if (dexRes.status === 'rejected') {
+            console.error("❌ DexScreener Failed:", dexRes.reason?.message);
+            if (dexRes.reason?.response) {
+                 console.error("   Status:", dexRes.reason.response.status);
+                 console.error("   Data:", JSON.stringify(dexRes.reason.response.data));
+            }
+        }
+
+        if (geckoRes.status === 'rejected') {
+            console.error("❌ GeckoTerminal Failed:", geckoRes.reason?.message);
+             if (geckoRes.reason?.response) {
+                 console.error("   Status:", geckoRes.reason.response.status);
+            }
+        }
+        // ------------------------------------
 
         if (dexRes.status === 'fulfilled' && dexRes.value.data.pairs?.length > 0) {
             const bestPair = dexRes.value.data.pairs.sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];

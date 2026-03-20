@@ -7,7 +7,9 @@ import { getAddress } from 'ethers';
 
 import { startPriceService } from './priceService';
 import { startMarketMetricsService } from './marketMetricsService';
-import contractTokensRaw from './tokens.json';
+
+import fs from 'fs';
+import path from 'path';
 
 dotenv.config();
 
@@ -47,8 +49,15 @@ interface ContractToken {
     deployments?: TokenDeployment[];
 }
 
-// Cast import to typed array
-const contractTokens = contractTokensRaw as ContractToken[];
+let contractTokens: ContractToken[] = [];
+try {
+    const tokensPath = path.join(__dirname, 'tokens.json');
+    const fileData = fs.readFileSync(tokensPath, 'utf8');
+    contractTokens = JSON.parse(fileData) as ContractToken[];
+    console.log(`[Server] ✅ Loaded ${contractTokens.length} tokens from JSON.`);
+} catch (error) {
+    console.error("[Server] ❌ Failed to load tokens.json:", error);
+}
 
 interface PriceData {
     price: number;

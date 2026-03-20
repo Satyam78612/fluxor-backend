@@ -6,6 +6,7 @@ import cors from 'cors';
 import { getAddress } from 'ethers';
 
 import { startPriceService } from './priceService';
+import { startMarketMetricsService } from './marketMetricsService';
 import contractTokensRaw from './tokens.json';
 
 dotenv.config();
@@ -22,9 +23,10 @@ redisClient.on('error', (err) => console.error('[Redis] Client Error', err));
 (async () => {
     await redisClient.connect();
     console.log('[Server] ✅ Connected to Redis');
-    
+
     // Pass the connected client to your price service
     startPriceService(redisClient);
+    startMarketMetricsService(redisClient);
 })();
 
 app.use(cors());
@@ -123,7 +125,7 @@ async function fetchLivePrice(chainId: number, address: string): Promise<PriceDa
         `https://api.geckoterminal.com/api/v2/networks/${network}/tokens/${cleanAddress}`,
         { timeout: AXIOS_TIMEOUT }
     ).then(res => ({ source: 'gecko', data: res.data, error: false })).catch(() => ({ error: true, data: null }))
-    : Promise.resolve({ error: true, data: null });
+        : Promise.resolve({ error: true, data: null });
 
     const dexPromise = axios.get(
         `https://api.dexscreener.com/latest/dex/tokens/${cleanAddress}`,
@@ -163,7 +165,7 @@ app.get('/api/portfolio/prices', async (req: Request, res: Response) => {
     // Redis: Get string, parse to JSON
     const pricesRaw = await redisClient.get("ALL_PRICES");
     const prices = pricesRaw ? JSON.parse(pricesRaw) : {};
-    
+
     const { ids } = req.query;
     if (ids && typeof ids === 'string') {
         const requestedIds = ids.split(',').map(i => i.trim().toLowerCase());
@@ -172,6 +174,21 @@ app.get('/api/portfolio/prices', async (req: Request, res: Response) => {
         return res.json(filtered);
     }
     res.json(prices);
+});
+
+app.get('/api/market/metrics', async (req: Request, res: Response) => {
+    try {
+        const fngRaw = await redisClient.get('FEAR_AND_GREED');
+        const domRaw = await redisClient.get('DOMINANCE');
+
+        res.json({
+            fearAndGreed: fngRaw ? JSON.parse(fngRaw) : null,
+            dominance: domRaw ? JSON.parse(domRaw) : null
+        });
+    } catch (error) {
+        console.error("Metrics API Error:", error);
+        res.status(500).json({ error: 'Failed to fetch market metrics' });
+    }
 });
 
 app.post('/api/portfolio/favorites', async (req: Request, res: Response) => {
@@ -184,7 +201,7 @@ app.post('/api/portfolio/favorites', async (req: Request, res: Response) => {
     for (const t of tokens) {
         const normAddr = normalizeAddress(t.chainId, t.address);
         const cacheKey = `fav:${t.chainId}:${normAddr}`;
-        
+
         // Redis check
         const cachedValRaw = await redisClient.get(cacheKey);
 
@@ -201,7 +218,7 @@ app.post('/api/portfolio/favorites', async (req: Request, res: Response) => {
             if (data) {
                 response[t.address] = data;
                 // Redis set with Expiry (60s)
-                await redisClient.set(`fav:${t.chainId}:${t.normAddr}`, JSON.stringify(data), { EX: 60 }); 
+                await redisClient.set(`fav:${t.chainId}:${t.normAddr}`, JSON.stringify(data), { EX: 60 });
             }
         });
         await Promise.all(promises);
@@ -299,4 +316,4 @@ app.get('/api/search', async (req: Request, res: Response) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Fluxor Backend running on port ${PORT}`));
+app.listen(PORT as number, '0.0.0.0', () => console.log(`Fluxor Backend running on port ${PORT}`));

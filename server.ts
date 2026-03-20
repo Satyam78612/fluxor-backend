@@ -200,14 +200,5 @@ app.get('/api/search', (req: Request, res: Response) => {
     searchTokenByContract(req, res, redisClient, contractTokens);
 });
 
-app.get('/api/tokens', (req: Request, res: Response) => {
-    try {
-        res.json(contractTokens);
-    } catch (error) {
-        console.error("Failed to fetch all tokens:", error);
-        res.status(500).json({ error: 'Failed to fetch tokens' });
-    }
-});
-
 const PORT = process.env.PORT || 3000;
 app.listen(PORT as number, '0.0.0.0', () => console.log(`Fluxor Backend running on port ${PORT}`));

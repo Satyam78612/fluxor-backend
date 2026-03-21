@@ -7,7 +7,6 @@ import { getAddress } from 'ethers';
 
 import { startPriceService } from './priceService';
 import { startMarketMetricsService } from './marketMetricsService';
-import { searchTokenByContract } from './tokenContract'; 
 
 import fs from 'fs';
 import path from 'path';
@@ -52,7 +51,8 @@ interface ContractToken {
 
 let contractTokens: ContractToken[] = [];
 try {
-    const tokensPath = path.join(__dirname, 'tokens.json'); // Note: Make sure to change __dirname to process.cwd() if Render gives you a missing file error again!
+    // ✅ FIX 1: Using process.cwd() so Render can find the file
+    const tokensPath = path.join(process.cwd(), 'tokens.json');
     const fileData = fs.readFileSync(tokensPath, 'utf8');
     contractTokens = JSON.parse(fileData) as ContractToken[];
     console.log(`[Server] ✅ Loaded ${contractTokens.length} tokens from JSON.`);
@@ -71,13 +71,53 @@ interface FavoriteRequestItem {
     address: string;
 }
 
+interface SearchResult {
+    source?: string;
+    chainId?: number;
+    contractAddress?: string;
+    id?: string;
+    name: string;
+    symbol: string;
+    price: number;
+    changePercent: number;
+    imageName: string;
+}
+
 // --- Helper Functions ---
 
-// Note: I kept normalizeAddress here because fetchLivePrice below still uses it!
 function normalizeAddress(chainId: number, address: string): string {
     if (!address) return "";
     if (chainId === 101) return address.trim();
-    try { return getAddress(address); } catch { return address.trim().toLowerCase(); }}
+    try { return getAddress(address); } catch { return address.trim().toLowerCase(); }
+}
+
+function toChecksumAddress(address: string): string {
+    if (!address || !address.startsWith('0x')) return address;
+    try { return getAddress(address); } catch (error) { return address; }
+}
+
+const chainNameMap: { [key: number]: string } = {
+    1: 'ethereum', 56: 'smartchain', 137: 'polygon', 10: 'optimism',
+    42161: 'arbitrum', 8453: 'base', 43114: 'avalanchec', 101: 'solana',
+    5000: 'mantle', 59144: 'linea', 143: 'monad', 999: 'hyperliquid',
+    196: 'xlayer', 4200: 'merlin', 9745: 'plasma', 146: 'sonic', 80094: 'berachain'
+};
+
+function mapChainId(chainInput: string | number): number {
+    if (!chainInput) return 0;
+    if (typeof chainInput === 'number') return chainInput;
+    const chainString = String(chainInput).toLowerCase().replace(/[_\-]/g, ' ').trim();
+    const map: { [key: string]: number } = {
+        'eth': 1, 'ethereum': 1, 'bsc': 56, 'bnb': 56, 'bnbchain': 56,
+        'binance smart chain': 56, 'bnb smart chain': 56, 'sol': 101, 'solana': 101,
+        'base': 8453, 'arbitrum': 42161, 'optimism': 10, 'polygon': 137,
+        'pos': 137, 'polygon pos': 137, 'avax': 43114, 'avalanche': 43114,
+        'mantle': 5000, 'monad': 143, 'hyperliquid': 999, 'x layer': 196,
+        'xlayer': 196, 'merlin': 4200, 'plasma': 9745, 'linea': 59144,
+        'sonic': 146, 'berachain': 80094
+    };
+    return map[chainString] || 0;
+}
 
 async function fetchLivePrice(chainId: number, address: string): Promise<PriceData | null> {
     const cleanAddress = normalizeAddress(chainId, address);
@@ -86,8 +126,8 @@ async function fetchLivePrice(chainId: number, address: string): Promise<PriceDa
     const geckoNetworkMap: { [key: number]: string } = {
         1: 'eth', 56: 'bsc', 137: 'polygon_pos', 10: 'optimism',
         42161: 'arbitrum', 8453: 'base', 43114: 'avax', 101: 'solana',
-        5000: 'mantle', 59144: 'monad', 999: 'hyperliquid', 146: 'sonic', 
-        80094: 'berachain'
+        5000: 'mantle', 59144: 'linea', 196: 'x-layer', 4200: 'merlin-chain',
+        143: 'monad', 999: 'hyperliquid', 146: 'sonic', 80094: 'berachain'
     };
     const network = geckoNetworkMap[chainId];
 
@@ -172,7 +212,6 @@ app.post('/api/portfolio/favorites', async (req: Request, res: Response) => {
         const normAddr = normalizeAddress(t.chainId, t.address);
         const cacheKey = `fav:${t.chainId}:${normAddr}`;
 
-        // Redis check
         const cachedValRaw = await redisClient.get(cacheKey);
 
         if (cachedValRaw) {
@@ -187,7 +226,6 @@ app.post('/api/portfolio/favorites', async (req: Request, res: Response) => {
             const data = await fetchLivePrice(t.chainId, t.address);
             if (data) {
                 response[t.address] = data;
-                // Redis set with Expiry (60s)
                 await redisClient.set(`fav:${t.chainId}:${t.normAddr}`, JSON.stringify(data), { EX: 60 });
             }
         });
@@ -196,8 +234,106 @@ app.post('/api/portfolio/favorites', async (req: Request, res: Response) => {
     res.json(response);
 });
 
-app.get('/api/search', (req: Request, res: Response) => {
-    searchTokenByContract(req, res, redisClient, contractTokens);
+app.get('/api/search', async (req: Request, res: Response) => {
+    const { address } = req.query;
+    if (!address || typeof address !== 'string') return res.status(400).json({ error: 'Query is required' });
+
+    const cleanQuery = address.trim().toLowerCase();
+
+    const localMatch = contractTokens.find(t =>
+        t.id.toLowerCase() === cleanQuery ||
+        t.symbol.toLowerCase() === cleanQuery ||
+        t.name.toLowerCase().includes(cleanQuery) ||
+        (t.deployments && t.deployments.some(d => d.address.toLowerCase() === cleanQuery))
+    );
+
+    if (localMatch) {
+        const pricesRaw = await redisClient.get("ALL_PRICES");
+        const allPrices = pricesRaw ? JSON.parse(pricesRaw) : {};
+        const priceInfo = allPrices[localMatch.id] || {};
+
+        return res.json({
+            source: 'BackendJSON',
+            id: localMatch.id,
+            name: localMatch.name,
+            symbol: localMatch.symbol,
+            price: parseFloat(priceInfo.usd || '0'),
+            changePercent: parseFloat(priceInfo.usd_24h_change || '0'),
+            imageName: localMatch.logo || "questionmark.circle"
+        });
+    }
+
+    const cachedDataRaw = await redisClient.get(cleanQuery);
+    if (cachedDataRaw) return res.json(JSON.parse(cachedDataRaw));
+
+    let tokenData: SearchResult | null = null;
+
+    try {
+        const [geckoRes, dexRes] = await Promise.allSettled([
+            axios.get(`https://api.geckoterminal.com/api/v2/search/pools?query=${cleanQuery}`, { timeout: 4000 }),
+            axios.get(`https://api.dexscreener.com/latest/dex/tokens/${cleanQuery}`, { timeout: 4000 })
+        ]);
+
+        // ✅ FIX 2: Check GeckoTerminal FIRST!
+        if (geckoRes.status === 'fulfilled' && geckoRes.value.data.data?.[0]) {
+            const pool = geckoRes.value.data.data[0];
+            const attr = pool.attributes;
+            tokenData = {
+                source: 'GeckoTerminal',
+                chainId: mapChainId(pool.relationships.network.data.id),
+                contractAddress: cleanQuery,
+                name: attr.name?.split(' / ')[0] || "Unknown",
+                symbol: attr.base_token_symbol || "UNK",
+                price: parseFloat(attr.base_token_price_usd || '0'),
+                changePercent: parseFloat(attr.price_change_percentage?.h24 || 0),
+                imageName: "questionmark.circle"
+            };
+        }
+
+        // ✅ FIX 3: Check DexScreener LAST (Fallback) & apply the isBase fix
+        if (!tokenData && dexRes.status === 'fulfilled' && dexRes.value.data.pairs?.length > 0) {
+            const bestPair = dexRes.value.data.pairs.sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+
+            const isBase = bestPair.baseToken.address.toLowerCase() === cleanQuery;
+            const targetToken = isBase ? bestPair.baseToken : bestPair.quoteToken;
+
+            tokenData = {
+                source: 'DexScreener',
+                chainId: mapChainId(bestPair.chainId),
+                contractAddress: targetToken.address,
+                name: targetToken.name,
+                symbol: targetToken.symbol,
+                price: parseFloat(bestPair.priceUsd || '0'),
+                changePercent: parseFloat(bestPair.priceChange?.h24 || 0),
+                imageName: bestPair?.info?.imageUrl || "questionmark.circle"
+            };
+        }
+    } catch (err) {
+        console.error("Search failed", err);
+    }
+
+    if (tokenData && (tokenData.imageName === "questionmark.circle" || !tokenData.imageName)) {
+        const chainKey = chainNameMap[tokenData.chainId || 0];
+        if (chainKey && cleanQuery.startsWith('0x')) {
+            tokenData.imageName = `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${chainKey}/assets/${toChecksumAddress(cleanQuery)}/logo.png`;
+        }
+    }
+
+    if (tokenData) {
+        await redisClient.set(cleanQuery, JSON.stringify(tokenData), { EX: 600 });
+        return res.json(tokenData);
+    }
+    res.status(404).json({ error: 'Token not found' });
+});
+
+// ✅ FIX 4: Added the /api/tokens route so your iOS app can load the tokens!
+app.get('/api/tokens', (req: Request, res: Response) => {
+    try {
+        res.json(contractTokens);
+    } catch (error) {
+        console.error("Failed to fetch all tokens:", error);
+        res.status(500).json({ error: 'Failed to fetch tokens' });
+    }
 });
 
 const PORT = process.env.PORT || 3000;

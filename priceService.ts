@@ -13,10 +13,10 @@ const TOP_COIN_IDS: string[] = [
     "starknet", "syrup", "pendle", "layerzero", "raydium", "eigenlayer"
 ];
 
-const INTERVAL_TOP_MS = 5 * 60 * 1000;   
-const INTERVAL_REST_MS = 30 * 60 * 1000; 
+const INTERVAL_TOP_MS = 5 * 60 * 1000;    
+const INTERVAL_REST_MS = 10 * 60 * 1000;
 
-const CG_BATCH_SIZE = 40; 
+const CG_BATCH_SIZE = 490; 
 const CG_DELAY_MS = 3000; 
 
 interface Token {

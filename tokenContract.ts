@@ -156,22 +156,38 @@ function findInJsonByName(
 }
 
 async function fetchByContractAddress(address: string): Promise<TokenMetadata | null> {
-    try {
-        const res = await axios.get(
-            `https://api.dexscreener.com/latest/dex/search`,
-            { params: { q: address }, timeout: 4000 }
-        );
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+            const res = await axios.get(
+                `https://api.dexscreener.com/latest/dex/tokens/${address}`,
+                { timeout: 6000 }
+            );
 
-        const pairs: any[] = res.data?.pairs;
-        if (!pairs?.length) return null;
+            let pairs: any[] = res.data?.pairs;
 
-        const best = pickBestPair(pairs);
-        return extractFromPair(best, address);
+            if (!pairs?.length) {
+                const res2 = await axios.get(
+                    `https://api.dexscreener.com/latest/dex/search`,
+                    { params: { q: address }, timeout: 6000 }
+                );
+                pairs = res2.data?.pairs;
+            }
 
-    } catch (err) {
-        console.error('[tokenContract] DexScreener contract search error:', err);
-        return null;
+            if (!pairs?.length) {
+                if (attempt < 2) continue;
+                return null;
+            }
+
+            const best = pickBestPair(pairs);
+            return extractFromPair(best, address);
+
+        } catch (err) {
+            if (attempt < 2) continue;
+            console.error('[tokenContract] DexScreener contract search error:', err);
+            return null;
+        }
     }
+    return null;
 }
 
 const MIN_VOLUME_USD = 100_000;
@@ -180,7 +196,7 @@ async function fetchByName(query: string): Promise<TokenMetadata[]> {
     try {
         const res = await axios.get(
             `https://api.dexscreener.com/latest/dex/search`,
-            { params: { q: query }, timeout: 4000 }
+            { params: { q: query }, timeout: 6000 }
         );
 
         const pairs: any[] = res.data?.pairs;

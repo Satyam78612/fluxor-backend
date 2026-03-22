@@ -174,7 +174,9 @@ async function fetchByContractAddress(address: string): Promise<TokenMetadata | 
     }
 }
 
-async function fetchByName(query: string): Promise<TokenMetadata | null> {
+const MIN_VOLUME_USD = 100_000;
+
+async function fetchByName(query: string): Promise<TokenMetadata[]> {
     try {
         const res = await axios.get(
             `https://api.dexscreener.com/latest/dex/search`,
@@ -182,14 +184,28 @@ async function fetchByName(query: string): Promise<TokenMetadata | null> {
         );
 
         const pairs: any[] = res.data?.pairs;
-        if (!pairs?.length) return null;
+        if (!pairs?.length) return [];
 
-        const best = pickBestPair(pairs);
-        return extractFromPair(best);
+        // Filter by volume >= $100k
+        const qualifiedPairs = pairs.filter(p => (p.volume?.h24 ?? 0) >= MIN_VOLUME_USD);
+        if (!qualifiedPairs.length) return [];
+
+        // Deduplicate by baseToken address — keep highest liquidity per token
+        const seen = new Set<string>();
+        const deduped: any[] = [];
+        for (const pair of qualifiedPairs.sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))) {
+            const key = pair.baseToken.address.toLowerCase();
+            if (!seen.has(key)) {
+                seen.add(key);
+                deduped.push(pair);
+            }
+        }
+
+        return deduped.slice(0, 10).map(pair => extractFromPair(pair));
 
     } catch (err) {
         console.error('[tokenContract] DexScreener name search error:', err);
-        return null;
+        return [];
     }
 }
 
@@ -266,12 +282,8 @@ export async function resolveTokenByName(
     } catch { /* non-fatal */ }
 
     console.log(`[tokenContract] 🔍 [3/3] DexScreener name search → "${query}"`);
-    const result = await fetchByName(query);
-
-    if (!result) return [];
-
-    const results = [result];
-
+    const results = await fetchByName(query);
+    if (!results.length) return [];
     try {
         await redisClient.set(cacheKey, JSON.stringify(results), { EX: 300 });
     } catch { /* non-fatal */ }

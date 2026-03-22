@@ -163,6 +163,11 @@ async function fetchByContractAddress(address: string): Promise<TokenMetadata | 
                 { timeout: 6000 }
             );
 
+            if (res.status === 429 || res.headers['content-type']?.includes('text/html')) {
+            console.warn('[tokenContract] ⚠️ DexScreener rate limited');
+            return null;
+        }
+
             let pairs: any[] = res.data?.pairs;
 
             if (!pairs?.length) {
@@ -170,6 +175,12 @@ async function fetchByContractAddress(address: string): Promise<TokenMetadata | 
                     `https://api.dexscreener.com/latest/dex/search`,
                     { params: { q: address }, timeout: 6000 }
                 );
+
+                if (res2.status === 429 || res2.headers['content-type']?.includes('text/html')) {
+                    console.warn('[tokenContract] ⚠️ DexScreener rate limited');
+                    return null;
+                }
+
                 pairs = res2.data?.pairs;
             }
 
@@ -199,14 +210,19 @@ async function fetchByName(query: string): Promise<TokenMetadata[]> {
             { params: { q: query }, timeout: 6000 }
         );
 
+        if (res.status === 429 || res.headers['content-type']?.includes('text/html')) {
+            console.warn('[tokenContract] ⚠️ DexScreener rate limited');
+            return [];
+        }
+
         const pairs: any[] = res.data?.pairs;
         if (!pairs?.length) return [];
 
-        // Filter by volume >= $100k
+
         const qualifiedPairs = pairs.filter(p => (p.volume?.h24 ?? 0) >= MIN_VOLUME_USD);
         if (!qualifiedPairs.length) return [];
 
-        // Deduplicate by baseToken address — keep highest liquidity per token
+
         const seen = new Set<string>();
         const deduped: any[] = [];
         for (const pair of qualifiedPairs.sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))) {

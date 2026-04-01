@@ -28,33 +28,33 @@ export interface TokenMetadata {
 }
 
 const CHAIN_ID_TO_TRUSTWALLET: Record<number, string> = {
-    1:     'ethereum',
-    56:    'smartchain',
-    137:   'polygon',
-    10:    'optimism',
+    1: 'ethereum',
+    56: 'smartchain',
+    137: 'polygon',
+    10: 'optimism',
     42161: 'arbitrum',
-    8453:  'base',
+    8453: 'base',
     43114: 'avalanchec',
     59144: 'linea',
-    5000:  'mantle',
-    101:   'solana',
+    5000: 'mantle',
+    101: 'solana',
 };
 
 const DEX_CHAIN_STRING_TO_ID: Record<string, number> = {
-    ethereum:    1,
-    bsc:         56,
-    polygon:     137,
-    optimism:    10,
-    arbitrum:    42161,
-    base:        8453,
-    avalanche:   43114,
-    solana:      101,
-    mantle:      5000,
-    monad:       143,
+    ethereum: 1,
+    bsc: 56,
+    polygon: 137,
+    optimism: 10,
+    arbitrum: 42161,
+    base: 8453,
+    avalanche: 43114,
+    solana: 101,
+    mantle: 5000,
+    monad: 143,
     hyperliquid: 999,
-    plasma:      9745,
-    sonic:       146,
-    berachain:   80094,
+    plasma: 9745,
+    sonic: 146,
+    berachain: 80094,
 };
 
 function toChecksumAddress(address: string): string {
@@ -74,18 +74,18 @@ function extractFromPair(pair: any, inputAddress?: string): TokenMetadata {
         ? pair.baseToken.address.toLowerCase() === inputAddress.toLowerCase()
         : true;
 
-    const token      = isBase ? pair.baseToken : pair.quoteToken;
+    const token = isBase ? pair.baseToken : pair.quoteToken;
     const resolvedId = DEX_CHAIN_STRING_TO_ID[pair.chainId] ?? null;
 
     return {
-        chainId:         resolvedId,
+        chainId: resolvedId,
         contractAddress: token.address,
-        name:            token.name,
-        symbol:          token.symbol,
-        price:           pair.priceUsd         ? parseFloat(pair.priceUsd)         : null,
-        changePercent:   pair.priceChange?.h24  ? parseFloat(pair.priceChange.h24)  : null,
-        imageUrl:        pair?.info?.imageUrl   || getTrustWalletLogo(resolvedId, token.address),
-        source:          'DexScreener',
+        name: token.name,
+        symbol: token.symbol,
+        price: pair.priceUsd ? parseFloat(pair.priceUsd) : null,
+        changePercent: pair.priceChange?.h24 ? parseFloat(pair.priceChange.h24) : null,
+        imageUrl: pair?.info?.imageUrl || getTrustWalletLogo(resolvedId, token.address),
+        source: 'DexScreener',
     };
 }
 
@@ -108,19 +108,19 @@ function findInJsonByAddress(
 
     if (!match) return null;
 
-    const deployment      = match.deployments?.find(d => d.address.toLowerCase() === lower);
+    const deployment = match.deployments?.find(d => d.address.toLowerCase() === lower);
     const resolvedChainId = deployment?.chainId ?? null;
-    const priceInfo       = allPrices[match.id] ?? {};
+    const priceInfo = allPrices[match.id] ?? {};
 
     return {
-        chainId:         resolvedChainId,
+        chainId: resolvedChainId,
         contractAddress: address,
-        name:            match.name,
-        symbol:          match.symbol,
-        price:           priceInfo.usd            ? parseFloat(priceInfo.usd)            : null,
-        changePercent:   priceInfo.usd_24h_change  ? parseFloat(priceInfo.usd_24h_change) : null,
-        imageUrl:        match.logo || (resolvedChainId ? getTrustWalletLogo(resolvedChainId, address) : null),
-        source:          'LocalJSON',
+        name: match.name,
+        symbol: match.symbol,
+        price: priceInfo.usd ? parseFloat(priceInfo.usd) : null,
+        changePercent: priceInfo.usd_24h_change ? parseFloat(priceInfo.usd_24h_change) : null,
+        imageUrl: match.logo || (resolvedChainId ? getTrustWalletLogo(resolvedChainId, address) : null),
+        source: 'LocalJSON',
     };
 }
 
@@ -132,25 +132,32 @@ function findInJsonByName(
     const lower = query.toLowerCase();
 
     const matches = contractTokens.filter(t =>
-        t.id.toLowerCase()     === lower ||
+        t.id.toLowerCase() === lower ||
         t.symbol.toLowerCase() === lower ||
         t.name.toLowerCase().includes(lower)
     );
 
-    return matches.map(match => {
-        const deployment      = match.deployments?.[0];
+    matches.sort((a, b) => {
+        const aExact = a.symbol.toLowerCase() === lower || a.id.toLowerCase() === lower;
+        const bExact = b.symbol.toLowerCase() === lower || b.id.toLowerCase() === lower;
+        if (aExact !== bExact) return aExact ? -1 : 1;
+        return 0;
+    });
+
+    return matches.slice(0, 10).map(match => {
+        const deployment = match.deployments?.[0];
         const resolvedChainId = deployment?.chainId ?? null;
-        const priceInfo       = allPrices[match.id] ?? {};
+        const priceInfo = allPrices[match.id] ?? {};
 
         return {
-            chainId:         resolvedChainId,
+            chainId: resolvedChainId,
             contractAddress: deployment?.address ?? '',
-            name:            match.name,
-            symbol:          match.symbol,
-            price:           priceInfo.usd            ? parseFloat(priceInfo.usd)            : null,
-            changePercent:   priceInfo.usd_24h_change  ? parseFloat(priceInfo.usd_24h_change) : null,
-            imageUrl:        match.logo || (resolvedChainId ? getTrustWalletLogo(resolvedChainId, deployment?.address ?? '') : null),
-            source:          'LocalJSON',
+            name: match.name,
+            symbol: match.symbol,
+            price: priceInfo.usd ? parseFloat(priceInfo.usd) : null,
+            changePercent: priceInfo.usd_24h_change ? parseFloat(priceInfo.usd_24h_change) : null,
+            imageUrl: match.logo || (resolvedChainId ? getTrustWalletLogo(resolvedChainId, deployment?.address ?? '') : null),
+            source: 'LocalJSON',
         };
     });
 }
@@ -164,9 +171,9 @@ async function fetchByContractAddress(address: string): Promise<TokenMetadata | 
             );
 
             if (res.status === 429 || res.headers['content-type']?.includes('text/html')) {
-            console.warn('[tokenContract] ⚠️ DexScreener rate limited');
-            return null;
-        }
+                console.warn('[tokenContract] ⚠️ DexScreener rate limited');
+                return null;
+            }
 
             let pairs: any[] = res.data?.pairs;
 

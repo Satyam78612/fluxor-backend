@@ -196,7 +196,22 @@ async function fetchByContractAddress(address: string): Promise<TokenMetadata | 
                 return null;
             }
 
-            const best = pickBestPair(pairs);
+            const matchingPairs = pairs.filter(p =>
+                p.baseToken?.address?.toLowerCase() === address.toLowerCase()
+            );
+
+            const supportedPairs = (matchingPairs.length > 0 ? matchingPairs : pairs).filter(p =>
+                DEX_CHAIN_STRING_TO_ID[p.chainId] !== undefined
+            );
+
+            const finalPairs = supportedPairs.length > 0 ? supportedPairs : pairs;
+
+            if (!finalPairs?.length) {
+                if (attempt < 2) continue;
+                return null;
+            }
+
+            const best = pickBestPair(finalPairs);
             return extractFromPair(best, address);
 
         } catch (err) {

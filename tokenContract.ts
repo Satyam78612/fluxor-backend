@@ -204,14 +204,12 @@ async function fetchByContractAddress(address: string): Promise<TokenMetadata | 
                 DEX_CHAIN_STRING_TO_ID[p.chainId] !== undefined
             );
 
-            const finalPairs = supportedPairs.length > 0 ? supportedPairs : pairs;
-
-            if (!finalPairs?.length) {
+            if (!supportedPairs.length) {
                 if (attempt < 2) continue;
                 return null;
             }
 
-            const best = pickBestPair(finalPairs);
+            const best = pickBestPair(supportedPairs);
             return extractFromPair(best, address);
 
         } catch (err) {

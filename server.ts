@@ -6,6 +6,7 @@ import cors from 'cors';
 import { getAddress } from 'ethers';
 
 import { startPriceService } from './priceService';
+import { startFiatRatesService, getFiatRates } from './fiatService';
 import { startMarketMetricsService } from './marketMetricsService';
 
 import { createTokenContractRouter, ContractToken } from './tokenContract';
@@ -26,9 +27,10 @@ redisClient.on('error', (err) => console.error('[Redis] Client Error', err));
 (async () => {
     await redisClient.connect();
     console.log('[Server] ✅ Connected to Redis');
-    
+
     startPriceService(redisClient);
     startMarketMetricsService(redisClient);
+    startFiatRatesService();
 })();
 
 app.use(cors());
@@ -233,6 +235,16 @@ app.get('/api/tokens', (req: Request, res: Response) => {
 });
 
 app.use('/api/token', createTokenContractRouter(redisClient as any, contractTokens));
+
+app.get('/api/fiat-rates', (req, res) => {
+    try {
+        const rates = getFiatRates();
+        res.json(rates);
+    } catch (error) {
+        console.error("Error serving fiat rates:", error);
+        res.status(500).json({ error: "Failed to fetch fiat rates" });
+    }
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT as number, '0.0.0.0', () => console.log(`Fluxor Backend running on port ${PORT}`));

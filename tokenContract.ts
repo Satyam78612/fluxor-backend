@@ -12,6 +12,7 @@ export interface ContractToken {
     id: string;
     symbol: string;
     name: string;
+    decimals?: number;
     logo?: string;
     deployments?: TokenDeployment[];
 }
@@ -21,6 +22,7 @@ export interface TokenMetadata {
     contractAddress: string;
     name: string;
     symbol: string;
+    decimals: number | null;
     price: number | null;
     changePercent: number | null;
     imageUrl: string | null;
@@ -82,6 +84,7 @@ function extractFromPair(pair: any, inputAddress?: string): TokenMetadata {
         contractAddress: token.address,
         name: token.name,
         symbol: token.symbol,
+        decimals: token.decimals ? parseInt(token.decimals) : null,
         price: pair.priceUsd ? parseFloat(pair.priceUsd) : null,
         changePercent: pair.priceChange?.h24 ? parseFloat(pair.priceChange.h24) : null,
         imageUrl: pair?.info?.imageUrl || getTrustWalletLogo(resolvedId, token.address),
@@ -117,6 +120,7 @@ function findInJsonByAddress(
         contractAddress: address,
         name: match.name,
         symbol: match.symbol,
+        decimals: match.decimals ?? null,
         price: priceInfo.usd ? parseFloat(priceInfo.usd) : null,
         changePercent: priceInfo.usd_24h_change ? parseFloat(priceInfo.usd_24h_change) : null,
         imageUrl: match.logo || (resolvedChainId ? getTrustWalletLogo(resolvedChainId, address) : null),
@@ -154,6 +158,7 @@ function findInJsonByName(
             contractAddress: deployment?.address ?? '',
             name: match.name,
             symbol: match.symbol,
+            decimals: match.decimals ?? null,
             price: priceInfo.usd ? parseFloat(priceInfo.usd) : null,
             changePercent: priceInfo.usd_24h_change ? parseFloat(priceInfo.usd_24h_change) : null,
             imageUrl: match.logo || (resolvedChainId ? getTrustWalletLogo(resolvedChainId, deployment?.address ?? '') : null),

@@ -19,6 +19,7 @@ export interface ContractToken {
 
 export interface TokenMetadata {
     chainId: number | null;
+    chainIds?: number[];
     contractAddress: string;
     name: string;
     symbol: string;
@@ -81,6 +82,7 @@ function extractFromPair(pair: any, inputAddress?: string): TokenMetadata {
 
     return {
         chainId: resolvedId,
+        chainIds: resolvedId ? [resolvedId] : [],
         contractAddress: token.address,
         name: token.name,
         symbol: token.symbol,
@@ -115,8 +117,11 @@ function findInJsonByAddress(
     const resolvedChainId = deployment?.chainId ?? null;
     const priceInfo = allPrices[match.id] ?? {};
 
+    const allChainIds = match.deployments?.map(d => d.chainId).filter((id): id is number => id !== undefined) || [];
+
     return {
         chainId: resolvedChainId,
+        chainIds: allChainIds,
         contractAddress: address,
         name: match.name,
         symbol: match.symbol,
@@ -153,8 +158,11 @@ function findInJsonByName(
         const resolvedChainId = deployment?.chainId ?? null;
         const priceInfo = allPrices[match.id] ?? {};
 
+        const allChainIds = match.deployments?.map(d => d.chainId).filter((id): id is number => id !== undefined) || [];
+
         return {
             chainId: resolvedChainId,
+            chainIds: allChainIds,
             contractAddress: deployment?.address ?? '',
             name: match.name,
             symbol: match.symbol,

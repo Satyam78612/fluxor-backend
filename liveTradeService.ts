@@ -72,7 +72,7 @@ async function fetchFromDexScreener(
     try {
         const res = await axios.get(
             `https://api.dexscreener.com/latest/dex/tokens/${contractAddress}`,
-            { timeout: 6000 }
+            { timeout: 2000 }
         );
 
         if (res.status === 429 || res.headers['content-type']?.includes('text/html')) {

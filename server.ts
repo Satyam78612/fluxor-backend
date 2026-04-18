@@ -8,8 +8,8 @@ import { getAddress } from 'ethers';
 import { startPriceService } from './priceService';
 import { startFiatRatesService, getFiatRates } from './fiatService';
 import { startMarketMetricsService } from './marketMetricsService';
-
 import { createTokenContractRouter, ContractToken } from './tokenContract';
+import { getLiveTradeData, LiveTradeToken } from './liveTradeService';
 
 import fs from 'fs';
 import path from 'path';
@@ -39,8 +39,7 @@ app.use(express.json());
 let contractTokens: ContractToken[] = [];
 try {
     const tokensPath = path.join(process.cwd(), 'tokens.json');
-    const fileData = fs.readFileSync(tokensPath, 'utf8');
-    contractTokens = JSON.parse(fileData) as ContractToken[];
+    contractTokens = JSON.parse(fs.readFileSync(tokensPath, 'utf8')) as ContractToken[];
     console.log(`[Server] ✅ Loaded ${contractTokens.length} tokens from JSON.`);
 } catch (error) {
     console.error("[Server] ❌ Failed to load tokens.json:", error);
@@ -77,13 +76,13 @@ async function fetchLivePrice(chainId: number, address: string): Promise<PriceDa
     const geckoPromise = network ? axios.get(
         `https://api.geckoterminal.com/api/v2/networks/${network}/tokens/${cleanAddress}`,
         { timeout: AXIOS_TIMEOUT }
-    ).then(res => ({ source: 'gecko', data: res.data, error: false })).catch(() => ({ error: true, data: null }))
+    ).then(res => ({ data: res.data, error: false })).catch(() => ({ error: true, data: null }))
         : Promise.resolve({ error: true, data: null });
 
     const dexPromise = axios.get(
         `https://api.dexscreener.com/latest/dex/tokens/${cleanAddress}`,
         { timeout: AXIOS_TIMEOUT }
-    ).then(res => ({ source: 'dex', data: res.data, error: false })).catch(() => ({ error: true, data: null }));
+    ).then(res => ({ data: res.data, error: false })).catch(() => ({ error: true, data: null }));
 
     const [geckoResult, dexResult] = await Promise.all([geckoPromise, dexPromise]);
 
@@ -98,10 +97,10 @@ async function fetchLivePrice(chainId: number, address: string): Promise<PriceDa
 
     if (!dexResult.error && dexResult.data?.pairs?.length > 0) {
         const pairs = dexResult.data.pairs.sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
-        const bestPair = pairs[0];
+
         return {
-            price: parseFloat(bestPair.priceUsd || '0'),
-            change24h: bestPair.priceChange?.h24 || 0,
+            price: parseFloat(pairs[0].priceUsd || '0'),
+            change24h: pairs[0].priceChange?.h24 || 0,
             source: 'DexScreener'
         };
     }
@@ -112,12 +111,28 @@ app.get('/health', (_: Request, res: Response) => {
     res.json({ status: 'ok', uptime: process.uptime() });
 });
 
+app.get('/api/live-trade', async (req: Request, res: Response) => {
+    const { id } = req.query;
+
+    if (!id || typeof id !== 'string') {
+        return res.status(400).json({ error: '`id` query param is required (e.g. ?id=bitcoin)' });
+    }
+
+    const data = await getLiveTradeData(id.trim(), contractTokens as LiveTradeToken[]);
+
+    if (!data) {
+        return res.status(404).json({ error: `No live data found for "${id}". Token may not be on DexScreener.` });
+    }
+
+    res.json(data);
+});
+
 app.get('/api/portfolio/prices', async (req: Request, res: Response) => {
     let prices: Record<string, any> = {};
     try {
         const pricesRaw = await redisClient.get("ALL_PRICES");
         if (pricesRaw) prices = JSON.parse(pricesRaw);
-    } catch { /* Redis down or malformed — continue with empty prices */ }
+    } catch { }
 
     const { ids } = req.query;
     if (ids && typeof ids === 'string') {
@@ -167,14 +182,13 @@ app.post('/api/portfolio/favorites', async (req: Request, res: Response) => {
     }
 
     if (missingTokens.length > 0) {
-        const promises = missingTokens.map(async (t) => {
+        await Promise.all(missingTokens.map(async (t) => {
             const data = await fetchLivePrice(t.chainId, t.address);
             if (data) {
                 response[t.address] = data;
                 await redisClient.set(`fav:${t.chainId}:${t.normAddr}`, JSON.stringify(data), { EX: 60 });
             }
-        });
-        await Promise.all(promises);
+        }));
     }
     res.json(response);
 });
@@ -199,9 +213,9 @@ app.get('/api/search', async (req: Request, res: Response) => {
         try {
             const pricesRaw = await redisClient.get("ALL_PRICES");
             if (pricesRaw) allPrices = JSON.parse(pricesRaw);
-        } catch { /* continue with empty prices */ }
+        } catch { }
 
-        const results = localMatches.map(match => {
+        return res.json(localMatches.map(match => {
             const priceInfo = allPrices[match.id] || {};
             return {
                 source: 'BackendJSON',
@@ -212,9 +226,7 @@ app.get('/api/search', async (req: Request, res: Response) => {
                 changePercent: parseFloat(priceInfo.usd_24h_change || '0'),
                 imageName: match.logo || "questionmark.circle",
             };
-        });
-
-        return res.json(results);
+        }));
     }
 
     return res.status(404).json({
@@ -229,7 +241,7 @@ app.get('/api/tokens', (req: Request, res: Response) => {
     try {
         res.json(contractTokens);
     } catch (error) {
-        console.error("Failed to fetch all tokens:", error);
+
         res.status(500).json({ error: 'Failed to fetch tokens' });
     }
 });
@@ -238,13 +250,14 @@ app.use('/api/token', createTokenContractRouter(redisClient as any, contractToke
 
 app.get('/api/fiat-rates', (req, res) => {
     try {
-        const rates = getFiatRates();
-        res.json(rates);
+        res.json(getFiatRates());
     } catch (error) {
-        console.error("Error serving fiat rates:", error);
+
         res.status(500).json({ error: "Failed to fetch fiat rates" });
     }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT as number, '0.0.0.0', () => console.log(`Fluxor Backend running on port ${PORT}`));
+app.listen(PORT as number, '0.0.0.0', () =>
+    console.log(`Fluxor Backend running on port ${PORT}`)
+);

@@ -158,12 +158,17 @@ async function fetchBirdeye(address: string, chain: string): Promise<TradeRow[]>
         return items
             .map(tx => {
                 const isBuy = tx.side === 'buy';
-                // token we're tracking is in `to` for buy, `from` for sell
                 const side = isBuy ? tx.to : tx.from;
+
+                // Price usually works fine as it's just 'price'
                 const price = side?.price ?? side?.nearestPrice ?? 0;
-                const amount = Math.abs(side?.uiAmount ?? side?.uiChangeAmount ?? 0);
+
+                // FIX: Use snake_case to match Birdeye's JSON
+                const amount = Math.abs(side?.ui_amount ?? side?.ui_change_amount ?? 0);
+
                 return {
-                    price, amount,
+                    price,
+                    amount,
                     side: isBuy ? 'buy' as const : 'sell' as const,
                     time: (tx.blockUnixTime ?? 0) * 1000,
                 };
@@ -225,17 +230,20 @@ async function fetchCodex(address: string, chain: string): Promise<TradeRow[]> {
 
         return items
             .map(item => {
-                // 1. Determine Buy or Sell from the new eventDisplayType field
-                const isBuy = item.eventDisplayType === 'Buy';
-
-                // 2. Safely extract the data object
+                // Safely extract the data object
                 const swapData = item.data || {};
 
-                // 3. Extract the exact numbers we tested in the playground
-                const priceUsd = parseFloat(swapData.priceUsd || '0');
-                const priceUsdTotal = parseFloat(swapData.priceUsdTotal || '0');
+                // 1. Determine Buy or Sell
+                const isBuy = swapData.type === 'buy' || item.eventDisplayType === 'Buy';
 
-                // 4. Calculate the raw token amount mathematically
+                // 2. FIX: Check both the root (item) and the child (swapData) for the values
+                const rawPrice = item.priceUsd || swapData.priceUsd || '0';
+                const rawTotal = item.token0ValueUsd || item.token1ValueUsd || swapData.priceUsdTotal || '0';
+
+                const priceUsd = parseFloat(rawPrice);
+                const priceUsdTotal = parseFloat(rawTotal);
+
+                // 3. Calculate Token Amount mathematically
                 const amount = priceUsd > 0 && priceUsdTotal > 0 ? priceUsdTotal / priceUsd : 0;
 
                 return {

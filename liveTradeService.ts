@@ -1,7 +1,5 @@
 import axios from 'axios';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
 interface TokenDeployment {
     chainId?: number;
     liquidityUsd?: number;
@@ -64,6 +62,8 @@ const DEX_TO_BIRDEYE_CHAIN: Record<string, string> = {
     base: 'base',
     avalanche: 'avalanche',
     mantle: 'mantle',
+    monad: 'monad',
+    hyperevm: 'hyperevm',
 };
 
 // ─── In-memory cache ──────────────────────────────────────────────────────────
@@ -127,23 +127,6 @@ async function fetchDexScreenerMetrics(
         return null;
     }
 }
-
-// ─── Birdeye ──────────────────────────────────────────────────────────────────
-// Actual Birdeye /defi/txs/token response shape (relevant fields):
-//
-//   items[].blockUnixTime   — unix timestamp (seconds)
-//   items[].side            — "buy" | "sell"
-//   items[].from            — token being given up
-//     .uiAmount             — human-readable amount
-//     .price                — USD price per token (may be null)
-//     .nearestPrice         — fallback USD price
-//   items[].to              — token being received
-//     .uiAmount             — human-readable amount
-//     .price                — USD price per token
-//     .nearestPrice         — fallback
-//
-//  For a BUY:  the queried token is in `to`  (you receive it)
-//  For a SELL: the queried token is in `from` (you give it up)
 
 async function fetchBirdeyeTrades(
     contractAddress: string,

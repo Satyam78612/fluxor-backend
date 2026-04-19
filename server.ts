@@ -128,7 +128,7 @@ app.get('/api/live-trade', async (req: Request, res: Response) => {
         return res.status(400).json({ error: '`id` query param is required (e.g. ?id=bitcoin)' });
     }
 
-    const data = await getLiveTradeData(id.trim(), contractTokens as LiveTradeToken[]);
+    const data = await getLiveTradeData(id.trim(), contractTokens as LiveTradeToken[], redisClient as any);
 
     if (!data) {
         return res.status(404).json({ error: `No live data found for "${id}". Token may not be on DexScreener.` });

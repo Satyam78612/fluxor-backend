@@ -10,6 +10,8 @@ import { startFiatRatesService, getFiatRates } from './fiatService';
 import { startMarketMetricsService } from './marketMetricsService';
 import { createTokenContractRouter, ContractToken } from './tokenContract';
 import { getLiveTradeData, LiveTradeToken } from './liveTradeService';
+import { createSolverRouter } from './src/routes/solverRoutes';
+import { pool } from './src/db/db';
 
 import fs from 'fs';
 import path from 'path';
@@ -27,6 +29,14 @@ redisClient.on('error', (err) => console.error('[Redis] Client Error', err));
 (async () => {
     await redisClient.connect();
     console.log('[Server] ✅ Connected to Redis');
+
+    // Test DB Connection
+    try {
+        await pool.query('SELECT 1');
+        console.log('[Server] ✅ Connected to PostgreSQL');
+    } catch (dbErr) {
+        console.error('[Server] ❌ PostgreSQL connection failed (Is the db config correct?)', dbErr);
+    }
 
     startPriceService(redisClient);
     startMarketMetricsService(redisClient);
@@ -241,12 +251,12 @@ app.get('/api/tokens', (req: Request, res: Response) => {
     try {
         res.json(contractTokens);
     } catch (error) {
-
         res.status(500).json({ error: 'Failed to fetch tokens' });
     }
 });
 
 app.use('/api/token', createTokenContractRouter(redisClient as any, contractTokens));
+app.use('/api/swap', createSolverRouter(redisClient as any));
 
 app.get('/api/fiat-rates', (req, res) => {
     try {

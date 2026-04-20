@@ -9,7 +9,7 @@ import { startPriceService } from './priceService';
 import { startFiatRatesService, getFiatRates } from './fiatService';
 import { startMarketMetricsService } from './marketMetricsService';
 import { createTokenContractRouter, ContractToken } from './tokenContract';
-import { getLiveTradeData, LiveTradeToken } from './liveTradeService';
+import { getTradeTape } from './tradeTapeService';
 import { createSolverRouter } from './src/routes/solverRoutes';
 import { pool } from './src/db/db';
 
@@ -121,21 +121,7 @@ app.get('/health', (_: Request, res: Response) => {
     res.json({ status: 'ok', uptime: process.uptime() });
 });
 
-app.get('/api/live-trade', async (req: Request, res: Response) => {
-    const { id } = req.query;
 
-    if (!id || typeof id !== 'string') {
-        return res.status(400).json({ error: '`id` query param is required (e.g. ?id=bitcoin)' });
-    }
-
-    const data = await getLiveTradeData(id.trim(), contractTokens as LiveTradeToken[], redisClient as any);
-
-    if (!data) {
-        return res.status(404).json({ error: `No live data found for "${id}". Token may not be on DexScreener.` });
-    }
-
-    res.json(data);
-});
 
 app.get('/api/portfolio/prices', async (req: Request, res: Response) => {
     let prices: Record<string, any> = {};
@@ -253,6 +239,25 @@ app.get('/api/tokens', (req: Request, res: Response) => {
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch tokens' });
     }
+});
+
+app.get('/api/token/trades', async (req: Request, res: Response) => {
+    const { address, chainId } = req.query;
+
+    if (!address || typeof address !== 'string') {
+        return res.status(400).json({ error: '`address` query param is required' });
+    }
+    if (!chainId || typeof chainId !== 'string') {
+        return res.status(400).json({ error: '`chainId` query param is required (e.g. 1 = ETH, 101 = Solana)' });
+    }
+
+    const parsed = parseInt(chainId, 10);
+    if (isNaN(parsed)) {
+        return res.status(400).json({ error: '`chainId` must be a valid integer' });
+    }
+
+    const ticks = await getTradeTape(address.trim(), parsed, redisClient as any);
+    res.json(ticks);
 });
 
 app.use('/api/token', createTokenContractRouter(redisClient as any, contractTokens));
